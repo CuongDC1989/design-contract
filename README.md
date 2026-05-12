@@ -1,11 +1,11 @@
-# @solashi/design-contract
+# @cuongdc1989/design-contract
 
 Design contract testing engine: compare CSS computed styles in Storybook against Figma design specs.
 
 ## Install
 
 ```bash
-npm install @solashi/design-contract
+npm install @cuongdc1989/design-contract
 npx design-contract init
 ```
 
@@ -18,7 +18,7 @@ npx design-contract init
 ## Config
 
 ```js
-import { CHECKS_STRICT, CHECKS_LAYOUT } from '@solashi/design-contract'
+import { CHECKS_STRICT, CHECKS_LAYOUT } from '@cuongdc1989/design-contract'
 
 export default {
   figmaFileKey: process.env.FIGMA_FILE_KEY,

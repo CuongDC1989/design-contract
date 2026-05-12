@@ -1,5 +1,5 @@
 {
-  "name": "@solashi/design-contract",
+  "name": "@cuongdc1989/design-contract",
   "version": "1.0.0",
   "description": "Design contract testing engine: compare Storybook CSS against Figma specs",
   "type": "module",
