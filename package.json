@@ -1,0 +1,24 @@
+{
+  "name": "@solashi/design-contract",
+  "version": "1.0.0",
+  "description": "Design contract testing engine: compare Storybook CSS against Figma specs",
+  "type": "module",
+  "main": "index.mjs",
+  "bin": {
+    "design-contract": "./bin/cli.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "bin/",
+    "src/"
+  ],
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "playwright": "^1.40.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["design-contract", "figma", "storybook", "visual-testing"],
+  "license": "MIT"
+}
