@@ -10,7 +10,8 @@
   "files": [
     "index.mjs",
     "bin/",
-    "src/"
+    "src/",
+    "skills/"
   ],
   "dependencies": {
     "dotenv": "^16.0.0",

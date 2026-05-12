@@ -3,6 +3,7 @@ import path from 'node:path';
 import { init } from '../src/init.mjs';
 import { fetchFigmaSpec } from '../src/fetch-spec.mjs';
 import { runDesignContractTest } from '../src/run-test.mjs';
+import { generateReport } from '../src/reporter.mjs';
 
 // Load .env from CWD before anything else (safe to fail if dotenv not present)
 try { await import('dotenv/config'); } catch {}
@@ -34,7 +35,9 @@ switch (command) {
 
   case 'test': {
     const config = await loadConfig();
-    const passed = await runDesignContractTest(config);
+    const { passed, results, startTime, endTime } = await runDesignContractTest(config);
+    const reportPath = await generateReport(results, config, { startTime, endTime });
+    console.log(`\nReport: ${reportPath}`);
     if (!passed) process.exit(1);
     break;
   }
@@ -42,7 +45,9 @@ switch (command) {
   case 'run': {
     const config = await loadConfig();
     await fetchFigmaSpec(config);
-    const passed = await runDesignContractTest(config);
+    const { passed, results, startTime, endTime } = await runDesignContractTest(config);
+    const reportPath = await generateReport(results, config, { startTime, endTime });
+    console.log(`\nReport: ${reportPath}`);
     if (!passed) process.exit(1);
     break;
   }

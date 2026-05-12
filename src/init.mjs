@@ -1,9 +1,15 @@
 import fs from 'node:fs/promises';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const { name: PACKAGE_NAME } = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8')
+);
+
+const SKILL_SOURCE = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../skills/create-story.md'
 );
 
 const CONFIG_TEMPLATE = `import { CHECKS_STRICT, CHECKS_CONTAINER, CHECKS_LAYOUT } from '${PACKAGE_NAME}'
@@ -74,8 +80,19 @@ export async function init() {
     console.log(`✓  Added ${added} script(s) to package.json`);
   }
 
+  const skillDestDir = path.join(cwd, '.claude', 'commands');
+  const skillDestPath = path.join(skillDestDir, 'create-story.md');
+  if (existsSync(skillDestPath)) {
+    console.log('⚠  .claude/commands/create-story.md already exists — skipping.');
+  } else if (existsSync(SKILL_SOURCE)) {
+    await fs.mkdir(skillDestDir, { recursive: true });
+    await fs.copyFile(SKILL_SOURCE, skillDestPath);
+    console.log('✓  Installed Claude skill: .claude/commands/create-story.md');
+  }
+
   console.log('\nNext steps:');
   console.log('  1. Fill in cases[] and contractCases[] in design-contract.config.mjs');
   console.log('  2. Add FIGMA_TOKEN and FIGMA_FILE_KEY to .env');
   console.log('  3. Run: npm run test:design:full');
+  console.log('  4. Use /create-story in Claude Code to wire new components to Figma');
 }
