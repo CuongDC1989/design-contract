@@ -45,7 +45,7 @@ export async function runDesignContractTest(config) {
     }
     const url = `${storybookUrl}/iframe.html?id=${item.storyId}&viewMode=story`;
     try {
-      await page.goto(url, { waitUntil: 'networkidle' });
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
       await page.waitForSelector('#storybook-root', { timeout: 10000 });
     } catch {
       failed++;

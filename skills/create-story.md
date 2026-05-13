@@ -85,11 +85,84 @@ LoginPage      →  (no match found)      —             needs manual input
 
 ---
 
+## Step 0c — Fetch Figma node properties to determine checks
+
+**This is mandatory** — fetch the actual Figma node data before choosing `checks`. Do not guess based on component type alone.
+
+```bash
+# Replace NODE_ID with the target figmaNodeId (use comma-separated for multiple)
+curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
+  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=NODE_ID" \
+  | node -e "
+    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+    const node = Object.values(d.nodes)[0].document;
+    const props = {
+      hasFill:       (node.fills || []).some(f => f.type !== 'IMAGE' && f.opacity !== 0),
+      hasStroke:     (node.strokes || []).length > 0,
+      hasEffect:     (node.effects || []).some(e => e.type === 'DROP_SHADOW' || e.type === 'INNER_SHADOW'),
+      hasRadius:     node.cornerRadius > 0 || (node.rectangleCornerRadii || []).some(r => r > 0),
+      hasOpacity:    node.opacity != null && node.opacity !== 1,
+      hasBlend:      node.blendMode && node.blendMode !== 'NORMAL',
+      hasLayout:     node.layoutMode != null,
+      hasPadding:    node.paddingLeft > 0 || node.paddingTop > 0,
+      hasGap:        node.itemSpacing > 0,
+      hasText:       node.type === 'TEXT',
+      hasTypography: node.style != null,
+      hasOverflow:   node.clipsContent === true,
+      hasSize:       node.absoluteBoundingBox != null,
+      name:          node.name,
+      type:          node.type,
+    };
+    console.log(JSON.stringify(props, null, 2));
+  "
+```
+
+**Determine checks from properties:**
+
+| Property present in Figma node | Add to checks |
+|---|---|
+| `hasSize` (always true for visible nodes) | `'exists'`, `'size'` |
+| `hasFill` | `'background'` |
+| `hasStroke` | `'border'` |
+| `hasEffect` (shadow) | `'shadow'` |
+| `hasRadius` | `'radius'` |
+| `hasOpacity` | `'opacity'` |
+| `hasBlend` | `'blend'` |
+| `hasLayout` (auto-layout) | `'layout'` |
+| `hasTypography` or `hasText` | `'typography'` |
+| `hasOverflow` | `'overflow'` |
+
+**Map to named check sets:**
+
+```
+All of: size + background + radius + border + shadow + opacity + layout + typography + overflow + blend
+  → CHECKS_STRICT
+
+size + background + radius + shadow + layout + overflow (no typography)
+  → CHECKS_CONTAINER
+
+size + layout only
+  → CHECKS_LAYOUT
+
+size + background + radius only
+  → CHECKS_SHAPE
+
+Anything else
+  → custom array: ['exists', 'size', 'layout', 'typography']
+```
+
+**Rule:** Always choose the strictest named set that fully covers the available properties.  
+A component with `hasFill + hasRadius + hasLayout + hasTypography` → `CHECKS_STRICT`, not `CHECKS_CONTAINER`.  
+Never downgrade to a looser set just because the component "looks simple".
+
+---
+
 ## Modes
 
 ### Mode A — Single component (user provides component + Figma node ID)
 
-Jump to Step 1 below. Use when user says "create story for X with node ID Y".
+Jump to Step 1 below. Use when user says "create story for X with node ID Y".  
+Still run Step 0c to determine checks before writing config.
 
 ### Mode B — Batch audit (user says "wire up all" or "check what's missing")
 
@@ -113,7 +186,7 @@ Jump to Step 1 below. Use when user says "create story for X with node ID Y".
 ```
 
 3. Ask the user: "Which components should I wire up? I'll need the Figma node ID for each."
-4. For each confirmed component+nodeId pair, run Steps 1–4 below in sequence.
+4. For each confirmed component+nodeId pair, run Steps 0c → 1 → 2 → 3 → 4 in sequence.
 5. After all components are done, run Step 5 (verify).
 
 ---
@@ -152,7 +225,84 @@ Open the component file. Add `data-testid` to the **root element** and any key s
 - Title `Users/UsersPage` → story ID `users-userspage--default`
 - Title `UI/DataTable` → story ID `ui-datatable--default`
 
-**Template for atomic components (CSF3):**
+### ⚠️ Critical rules — these cause "story failed to load" if violated
+
+**Rule 1: Always declare `component` in meta.**  
+Using `render` without `component` in meta causes Storybook v10 to fail loading the story.
+
+```tsx
+// ✅ CORRECT
+const meta: Meta<typeof ComponentName> = {
+  title: 'Feature/ComponentName',
+  component: ComponentName,          // required
+}
+export const Default: Story = {
+  args: { prop: value },
+}
+
+// ❌ WRONG — story will fail to load
+const meta: Meta = {
+  title: 'Feature/ComponentName',    // no component field
+}
+export const Default: Story = {
+  render: () => <ComponentName />,   // render without component → FAIL
+}
+```
+
+**Rule 2: Never use external image URLs in mock data.**  
+Images from `https://picsum.photos`, `https://via.placeholder.com`, or any external CDN will cause `networkidle` timeout. Use inline SVG data URLs instead.
+
+```tsx
+// ✅ CORRECT — no network requests
+const PLACEHOLDER_AVATAR = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="%23e2e8f0"/></svg>'
+
+// ❌ WRONG — will hang networkidle
+avatar: 'https://picsum.photos/seed/user-1/64/64'
+```
+
+If the component being tested itself renders external images (e.g. user avatars from a CMS), add `parameters: { chromatic: { disableSnapshot: true } }` — but more importantly, ensure mock data passed in `args` uses placeholder SVG URLs or empty strings, not CDN URLs.
+
+**Rule 3: Wrap with required providers in `decorators`, not in `render`.**  
+If the component uses `useNavigate`, `useParams`, TanStack Query, or any React context, wrap in `decorators`.
+
+```tsx
+// ✅ CORRECT
+decorators: [
+  (Story) => (
+    <MemoryRouter>
+      <QueryClientProvider client={queryClient}>
+        <Story />
+      </QueryClientProvider>
+    </MemoryRouter>
+  ),
+],
+```
+
+**Rule 4: All imports must resolve.**  
+Read the component source and trace every import. If the component imports from `@/lib/api` or similar path aliases, verify the alias is configured in `.storybook/main.ts`. If any import is unresolvable, the entire module graph fails to compile.
+
+**Rule 5: Provide all required props in `args`.**  
+Do not leave required props undefined. TypeScript may not catch this at story level. A component that crashes on mount (e.g., `cannot read property of undefined`) causes story load failure.
+
+```tsx
+// ✅ All required props present
+export const Default: Story = {
+  args: {
+    user: mockUser,  // required
+    open: true,      // required
+    onClose: () => {},  // required
+  },
+}
+```
+
+**Rule 6: Mock data cannot reference external URLs.**  
+Any file the story module imports — including mock data files in the same directory — must not contain CDN/external image URLs. Replace with SVG data URLs or empty strings.
+
+---
+
+### Templates
+
+**Atomic component:**
 
 ```tsx
 import type { Meta, StoryObj } from '@storybook/react'
@@ -167,12 +317,12 @@ type Story = StoryObj<typeof ComponentName>
 
 export const Default: Story = {
   args: {
-    // fill from component props
+    // all required props
   },
 }
 ```
 
-**Template for generic/page components** — always use `component` + `args`, NOT `render`. Using `render` without `component` causes "story failed to load" in Storybook v10:
+**Page / container with providers:**
 
 ```tsx
 import type { Meta, StoryObj } from '@storybook/react'
@@ -185,9 +335,7 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false 
 const meta: Meta<typeof ComponentName> = {
   title: 'Feature/ComponentName',
   component: ComponentName,
-  parameters: {
-    layout: 'fullscreen',
-  },
+  parameters: { layout: 'fullscreen' },
   decorators: [
     (Story) => (
       <QueryClientProvider client={queryClient}>
@@ -202,9 +350,20 @@ export default meta
 type Story = StoryObj<typeof ComponentName>
 
 export const Default: Story = {
-  args: {
-    // fill props here
-  },
+  args: {},
+}
+```
+
+**Component with local mock data (no external URLs):**
+
+```tsx
+const AVATAR_PLACEHOLDER = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="%23CBD5E1"/><text x="32" y="40" text-anchor="middle" fill="%23475569" font-size="24" font-family="sans-serif">U</text></svg>'
+
+const mockUser = {
+  id: 1,
+  name: 'Anaka Haruto',
+  avatar: AVATAR_PLACEHOLDER,   // ✅ not a CDN URL
+  email: 'anaka@example.com',
 }
 ```
 
@@ -225,19 +384,29 @@ export const Default: Story = {
 | Full page | `{ width: 1200, height: 900 }` |
 | Isolated small component | match natural size, e.g. `{ width: 250, height: 80 }` |
 
-**`checks`:**
-| Component type | checks |
+**`checks`** — determined by Step 0c Figma node properties, not by assumption:
+
+| Named set | Includes |
 |---|---|
-| Full page layout | `CHECKS_LAYOUT` |
-| Container with background/border/shadow | `CHECKS_CONTAINER` |
-| Atomic component (all properties) | `CHECKS_STRICT` |
-| Custom subset | `['exists', 'size', 'layout', 'typography']` |
+| `CHECKS_STRICT` | exists, size, radius, background, border, shadow, opacity, layout, typography, text, overflow, blend |
+| `CHECKS_CONTAINER` | exists, size, radius, background, shadow, layout, overflow |
+| `CHECKS_LAYOUT` | exists, size, layout |
+| `CHECKS_SHAPE` | exists, size, radius, background |
+
+Default: if the Figma node has **both** visual (fill/border/shadow/radius) **and** layout (padding/gap) properties, use `CHECKS_STRICT`.  
+Only use `CHECKS_LAYOUT` when the node has no fill, no border, and no radius set.
 
 **`selector`:**
 - Whole story (full page): omit selector
 - Specific element: `'[data-testid="my-component"]'`
 - Table cell: `'#storybook-root table tbody tr:first-child td:nth-child(2)'`
 - Extra typography target: add `typographySelector: 'span.truncate'`
+
+**`typographySelector`:**  
+Add when the component's typography is not on its root element. Point to the most representative text leaf:
+- A card with a title → `typographySelector: 'h2'`
+- A table cell with truncated text → `typographySelector: 'span.truncate'`
+- A badge with label text → `typographySelector: 'span'`
 
 ---
 
@@ -252,7 +421,7 @@ Add one entry to `cases[]` and one to `contractCases[]`:
 { name: 'feature-component--variant', storyId: 'feature-component--variant', figmaNodeId: 'XXXX-XXXX', figmaScale: 1, viewport: { width: 1200, height: 900 } },
 
 // contractCases[]
-{ name: 'feature-component--variant', checks: CHECKS_LAYOUT, selector: '[data-testid="component"]' },
+{ name: 'feature-component--variant', checks: CHECKS_STRICT, selector: '[data-testid="component"]' },
 ```
 
 For a sub-element tested inside a parent page story:
@@ -261,19 +430,64 @@ For a sub-element tested inside a parent page story:
 { name: 'feature-element--default', storyId: 'feature-parentpage--default', figmaNodeId: 'XXXX-XXXX', figmaScale: 1, viewport: { width: 1200, height: 900 } },
 
 // contractCases[] — selector finds the element within the parent story
-{ name: 'feature-element--default', checks: CHECKS_CONTAINER, selector: '[data-testid="element"]' },
+{ name: 'feature-element--default', checks: CHECKS_STRICT, selector: '[data-testid="element"]' },
 ```
 
 ---
 
-## Step 5 — Verify
+## Step 5 — Verify before declaring done
 
-After all stories are created:
+Run all of these. Do not skip any.
 
-1. Check TypeScript compiles: `npx tsc --noEmit`
-2. Remind the user to:
-   - Open Storybook (`npm run storybook`) and verify each new story renders correctly
-   - Run `npm run test:design` after Storybook is running
+### 5a — TypeScript check
+
+```bash
+npx tsc --noEmit
+```
+
+Fix any errors before continuing. A TypeScript error in a story file prevents the entire Storybook module graph from compiling.
+
+### 5b — Verify story ID is correct
+
+The story ID Storybook generates from a `title` must exactly match the `storyId` in config.
+
+Formula: lowercase the title, replace `/` with `-`, replace spaces with `-`, keep letters and digits only, then append `--` + lowercase export name.
+
+```
+title: 'Users/UserDetailDrawer'  →  prefix: users-userdetaildrawer
+export const Default             →  variant: default
+storyId: 'users-userdetaildrawer--default'   ✓
+```
+
+Common mistakes:
+- Camel case in title not fully lowercased → `UserDetail` becomes `userdetail` not `user-detail`
+- Extra spaces in title creating double hyphens
+- Export name with uppercase → always lowercase it in the storyId
+
+Verify with:
+```bash
+# List all current story IDs Storybook knows about (requires Storybook running)
+curl -s http://127.0.0.1:6006/index.json | node -e "
+  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  Object.keys(d.stories || d.entries || {}).forEach(id => console.log(id));
+" | grep 'users-userdetail'
+```
+
+### 5c — Check for external URLs in mock data
+
+```bash
+# Scan story and imported mock files for external image URLs
+grep -r "picsum\|placeholder.com\|via\.placeholder\|cloudinary\|imgur\|unsplash" \
+  src --include="*.tsx" --include="*.ts" -l
+```
+
+If any file is flagged, replace those URLs with SVG data URLs before running the test.
+
+### 5d — Remind user
+
+After all checks pass:
+- Open Storybook (`npm run storybook`) and visually verify each new story renders without errors
+- Run `npm run test:design` after Storybook is running
 
 ---
 
