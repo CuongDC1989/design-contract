@@ -410,11 +410,13 @@ Add when the component's typography is not on its root element. Point to the mos
 
 ---
 
-## Step 4 — Update `design-contract.config.mjs`
+## Step 4 — Update `design-contract.config.mjs` AND `design-spec.json`
+
+**⚠️ CRITICAL: Always update BOTH files.** The test runner reads from `design-spec.json` at runtime, NOT from `design-contract.config.mjs`. The config is the human-readable source; the spec is the cached snapshot used by tests. They must stay in sync.
 
 **Check first:** Read the current config. If this component's `name` already exists in `cases[]` or `contractCases[]`, update the existing entry rather than adding a duplicate.
 
-Add one entry to `cases[]` and one to `contractCases[]`:
+Add one entry to `cases[]` and one to `contractCases[]` in the config:
 
 ```js
 // cases[]
@@ -422,6 +424,17 @@ Add one entry to `cases[]` and one to `contractCases[]`:
 
 // contractCases[]
 { name: 'feature-component--variant', checks: CHECKS_STRICT, selector: '[data-testid="component"]' },
+```
+
+Then apply the same `checks` change to `design-spec.json` — find the entry by name and update its `checks` array to match:
+
+```bash
+# Verify both files agree on checks
+node -e "
+  const spec = JSON.parse(require('fs').readFileSync('design-spec.json','utf8'));
+  const name = 'feature-component--variant';
+  console.log(spec.specs[name]?.checks);
+"
 ```
 
 For a sub-element tested inside a parent page story:
@@ -488,6 +501,62 @@ If any file is flagged, replace those URLs with SVG data URLs before running the
 After all checks pass:
 - Open Storybook (`npm run storybook`) and visually verify each new story renders without errors
 - Run `npm run test:design` after Storybook is running
+
+---
+
+## Troubleshooting failing tests
+
+### Rule: fix component code, not checks
+
+When a test fails, the default action is to **fix the component to match Figma**, not to reduce `checks`. Reducing checks means the test passes but the bug survives. Only reduce or skip a check when the mismatch is fundamentally incomparable — see valid exceptions below.
+
+**Valid reasons to skip or reduce a check:**
+
+| Situation | Action |
+|---|---|
+| Figma node is a **wrapper frame** with null background/radius (no fill, no border) but the React component root has those properties | Remove `'background'` / `'radius'` — the checks compare the wrong layer |
+| Component has **dynamic/content-dependent width** (pagination controls, dynamic lists) | Skip `'size'` — width will never reliably match a Figma static snapshot |
+| Figma node is a **full-page frame** (not a component) | Reduce to `['exists', 'size']` — page frames have no flex layout or visual style to check |
+| A `<tr>` element uses **table layout, not flex** | Skip `'layout'` (alignItems/gap don't apply to table rows) |
+
+**Invalid reasons to reduce checks:**
+- "The test is hard to fix" → fix the component instead
+- "The difference is small" → fix it
+- "The component looks right visually" → Figma is the source of truth
+
+---
+
+### Figma wrapper frame pitfall
+
+When `figmaNodeId` points to a wrapper frame (e.g., `"Frame 7002"`) that has `backgroundColorRgba: null`, `cornerRadius: null`, `layout: null` — but your React selector points to the rendered component root (a `<span>` with background and border-radius) — the checks must be based on the **Figma node's actual properties**, not what the React element looks like.
+
+Check Figma node properties first (Step 0c) before deciding checks. If the Figma node has null for a property, do **not** include that check — even if the DOM element has that property set.
+
+---
+
+### CSS table-layout:fixed column width precision
+
+In Chrome, `table-layout: fixed` distributes **excess** table width proportionally across ALL columns — including columns that already have an explicit `size`. This means columns don't get exactly their declared widths unless ALL column sizes sum exactly to the table width.
+
+**Rule:** Give every column an explicit `size`. Make the total exactly equal to the table's render width.
+
+```
+Table render width = viewport width - story container padding
+                   = 1200 - 2×16px (Storybook p-4) = 1168px
+
+Column sizes must sum to 1168px:
+  name(165) + email(165) + phone(166) + ... = 1168  ✓
+```
+
+If any column is left without a `size`, Chrome distributes excess to all columns and none get exact widths.
+
+---
+
+### inline-flex badge wrapping in table cells
+
+`inline-flex` elements inherit `line-height` from their parent `<td>`. If the td has a large line-height (e.g., `leading-[22px]`) and the badge content is wide relative to the column, the badge may wrap to 2 lines and blow up the row height.
+
+Fix: add `whitespace-nowrap` and an explicit `leading-[Xpx]` on the badge span so it doesn't depend on the inherited line-height.
 
 ---
 
