@@ -1,6 +1,6 @@
 {
   "name": "@cuongdc1989/design-contract",
-  "version": "1.3.3",
+  "version": "1.3.4444444444444444",
   "description": "Design contract testing engine: compare Storybook CSS against Figma specs",
   "type": "module",
   "main": "index.mjs",
