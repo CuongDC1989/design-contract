@@ -155,7 +155,8 @@ export async function runDesignContractTest(config) {
         ['paddingBottom', styles.paddingBottom, expected.layout.paddingBottom],
         ['paddingLeft', styles.paddingLeft, expected.layout.paddingLeft],
       ]) {
-        const n = firstNumberPx(actual);
+        // CSS reports 'normal' when no gap/padding is set — treat as 0
+        const n = actual === 'normal' ? 0 : firstNumberPx(actual);
         if (n === null || !nearlyEqual(n, exp, 2))
           failures.push({ check: 'layout', property, expected: `${exp}px`, actual });
       }

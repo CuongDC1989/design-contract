@@ -57,7 +57,8 @@ function mapTextCase(value) {
 }
 
 function mapBlendMode(value) {
-  if (!value || value === 'NORMAL') return null;
+  // PASS_THROUGH is a Figma-only concept (layer compositing) with no CSS equivalent
+  if (!value || value === 'NORMAL' || value === 'PASS_THROUGH') return null;
   return value.toLowerCase().replace(/_/g, '-');
 }
 
