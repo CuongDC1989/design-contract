@@ -7,9 +7,9 @@ const { name: PACKAGE_NAME } = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8')
 );
 
-const SKILL_SOURCE = path.join(
+const SKILLS_DIR = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
-  '../skills/create-story.md'
+  '../skills'
 );
 
 const CONFIG_TEMPLATE = `import { CHECKS_STRICT, CHECKS_CONTAINER, CHECKS_LAYOUT } from '${PACKAGE_NAME}'
@@ -81,18 +81,43 @@ export async function init() {
   }
 
   const skillDestDir = path.join(cwd, '.claude', 'commands');
-  const skillDestPath = path.join(skillDestDir, 'create-story.md');
-  if (existsSync(skillDestPath)) {
-    console.log('⚠  .claude/commands/create-story.md already exists — skipping.');
-  } else if (existsSync(SKILL_SOURCE)) {
-    await fs.mkdir(skillDestDir, { recursive: true });
-    await fs.copyFile(SKILL_SOURCE, skillDestPath);
-    console.log('✓  Installed Claude skill: .claude/commands/create-story.md');
+  await fs.mkdir(skillDestDir, { recursive: true });
+  const installed = await copySkills(SKILLS_DIR, skillDestDir);
+  if (installed.length > 0) {
+    installed.forEach(f => console.log(`✓  Installed Claude skill: .claude/commands/${f}`));
   }
 
   console.log('\nNext steps:');
   console.log('  1. Fill in cases[] and contractCases[] in design-contract.config.mjs');
   console.log('  2. Add FIGMA_TOKEN and FIGMA_FILE_KEY to .env');
   console.log('  3. Run: npm run test:design:full');
-  console.log('  4. Use /create-story in Claude Code to wire new components to Figma');
+  console.log('  4. Use /figma-to-component in Claude Code to generate components from Figma');
+  console.log('  5. Use /create-story to wire individual components to Figma');
+}
+
+async function copySkills(srcDir, destDir, relBase = '') {
+  const installed = [];
+  let entries;
+  try { entries = await fs.readdir(srcDir, { withFileTypes: true }); }
+  catch { return installed; }
+
+  for (const entry of entries) {
+    const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
+    const src = path.join(srcDir, entry.name);
+    const dest = path.join(destDir, entry.name);
+
+    if (entry.isDirectory()) {
+      await fs.mkdir(dest, { recursive: true });
+      const sub = await copySkills(src, dest, rel);
+      installed.push(...sub);
+    } else if (entry.isFile() && entry.name.endsWith('.md')) {
+      if (existsSync(dest)) {
+        console.log(`⚠  .claude/commands/${rel} already exists — skipping.`);
+      } else {
+        await fs.copyFile(src, dest);
+        installed.push(rel);
+      }
+    }
+  }
+  return installed;
 }
