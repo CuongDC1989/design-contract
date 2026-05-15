@@ -410,6 +410,83 @@ Add when the component's typography is not on its root element. Point to the mos
 
 ---
 
+## Step 3b — Page / Screen: Maximizing CSS Coverage
+
+**The problem with page root testing:** A Figma page/screen root frame typically has no fills, no `layoutMode`, and no direct text children → `background`, `layout`, `typography` checks all get skipped silently. Simply adding `CHECKS_STRICT` to the page root won't help if the Figma node has nothing to check.
+
+**The fix:** Test each **section** within the page as a separate contract case.
+
+### Three-level strategy
+
+| Level | What | checks | selector |
+|---|---|---|---|
+| Page root | Background color, overflow, size | `['exists','size','background','overflow']` | `[data-testid="page-root"]` or omit |
+| Each section (header, hero, sidebar, content) | Full CSS: bg, layout, radius, shadow, typography | `CHECKS_STRICT` or `CHECKS_CONTAINER` | `[data-testid="section-hero"]` |
+| Isolated text block (hero title, nav label) | Typography only | `['exists','typography','text']` | `[data-testid="hero-title"]` |
+
+**Never use `['exists','size']` for a page.** If you only see 2 checks in the report, you're missing coverage.
+
+### Getting section node IDs from Figma
+
+```bash
+source .env
+curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
+  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=PAGE_NODE_ID" \
+  | node -e "
+    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+    const page = Object.values(d.nodes)[0].document;
+    (page.children || []).forEach(child => {
+      console.log(child.id.replace(':','-'), '\t', child.name, '\t', child.type);
+    });
+  "
+```
+
+Each line is one section: node ID + name. Use those IDs in `cases[].figmaNodeId`.
+
+### Config pattern for a page with sections
+
+```js
+// cases[] — one entry per section Figma node, all sharing the same storyId
+{ name: 'landing-hero',     storyId: 'landing-page--default', figmaNodeId: 'HERO_NODE_ID', figmaScale: 1, viewport: { width: 1440, height: 860 } },
+{ name: 'landing-features', storyId: 'landing-page--default', figmaNodeId: 'FEAT_NODE_ID', figmaScale: 1, viewport: { width: 1440, height: 860 } },
+{ name: 'landing-cta',      storyId: 'landing-page--default', figmaNodeId: 'CTA_NODE_ID',  figmaScale: 1, viewport: { width: 1440, height: 860 } },
+
+// contractCases[] — each selector targets its section in the rendered story
+{ name: 'landing-hero',     checks: CHECKS_STRICT,    selector: '[data-testid="hero-section"]',     typographySelector: 'h1' },
+{ name: 'landing-features', checks: CHECKS_CONTAINER, selector: '[data-testid="features-section"]' },
+{ name: 'landing-cta',      checks: CHECKS_STRICT,    selector: '[data-testid="cta-section"]',      typographySelector: 'h2' },
+```
+
+### `typographySelector` for sections
+
+Without `typographySelector`, the engine finds the first text leaf in the section (may be a badge, nav link, or caption — not the heading). Use `typographySelector` to pin the typography check to the right element.
+
+```js
+// ❌ May pick up a nav label or badge inside hero
+{ name: 'landing-hero', checks: CHECKS_STRICT, selector: '[data-testid="hero-section"]' }
+
+// ✅ Always measures the h1 typography
+{ name: 'landing-hero', checks: CHECKS_STRICT, selector: '[data-testid="hero-section"]', typographySelector: 'h1' }
+```
+
+Figma side: `extractNodeSpec()` uses `firstTextNode()` from the section's Figma node tree — typically the first heading. This aligns with `typographySelector: 'h1'`.
+
+### Shadow checks (detailed)
+
+When the `shadow` check runs, it now verifies 4 properties — not just presence:
+
+| Property | What is checked |
+|---|---|
+| `boxShadow` | Shadow present or none |
+| `shadowOffsetX` | CSS x-offset vs Figma `offset.x` (±2px tolerance) |
+| `shadowOffsetY` | CSS y-offset vs Figma `offset.y` (±2px tolerance) |
+| `shadowBlur` | CSS blur-radius vs Figma `radius` (±3px tolerance) |
+| `shadowColor` | CSS shadow color vs Figma drop shadow color |
+
+No config change needed — this is automatic when `'shadow'` is in `checks`.
+
+---
+
 ## Step 4 — Update `design-contract.config.mjs` AND `design-spec.json`
 
 **⚠️ CRITICAL: Always update BOTH files.** The test runner reads from `design-spec.json` at runtime, NOT from `design-contract.config.mjs`. The config is the human-readable source; the spec is the cached snapshot used by tests. They must stay in sync.
@@ -516,7 +593,7 @@ When a test fails, the default action is to **fix the component to match Figma**
 |---|---|
 | Figma node is a **wrapper frame** with null background/radius (no fill, no border) but the React component root has those properties | Remove `'background'` / `'radius'` — the checks compare the wrong layer |
 | Component has **dynamic/content-dependent width** (pagination controls, dynamic lists) | Skip `'size'` — width will never reliably match a Figma static snapshot |
-| Figma node is a **full-page frame** (not a component) | Reduce to `['exists', 'size']` — page frames have no flex layout or visual style to check |
+| Figma node is a **full-page frame** root with no fills/layout | Reduce to `['exists','size','background','overflow']` for the root only — test each section separately with `CHECKS_STRICT` |
 | A `<tr>` element uses **table layout, not flex** | Skip `'layout'` (alignItems/gap don't apply to table rows) |
 
 **Invalid reasons to reduce checks:**
@@ -564,7 +641,9 @@ Fix: add `whitespace-nowrap` and an explicit `leading-[Xpx]` on the badge span s
 
 | Component | storyId | figmaScale | checks | selector |
 |---|---|---|---|---|
-| Full page | `users-userspage--default` | 1 | `CHECKS_LAYOUT` | _(none)_ |
+| Page root frame | `users-userspage--default` | 1 | `['exists','size','background','overflow']` | `[data-testid="page-root"]` |
+| Page section (with bg + layout) | `users-userspage--default` | 1 | `CHECKS_CONTAINER` | `[data-testid="section-header"]` |
+| Page section (with typography) | `users-userspage--default` | 1 | `CHECKS_STRICT` | `[data-testid="section-hero"]` + `typographySelector: 'h1'` |
 | Card header (in page) | `users-userspage--default` | 1 | `CHECKS_CONTAINER` | `[data-testid="table-card-header"]` |
 | Search input (in page) | `users-userspage--default` | 2 | `CHECKS_STRICT` | `[data-testid="table-search"]` |
 | Status badge (standalone) | `users-statusbadge--active` | 2 | `CHECKS_STRICT` | _(story is the component)_ |

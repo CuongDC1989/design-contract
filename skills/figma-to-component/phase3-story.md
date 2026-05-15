@@ -172,6 +172,81 @@ curl -s http://127.0.0.1:6006/index.json | node -e "
 " | grep 'auth-logincard'
 ```
 
+### 3f — Page / Screen: maximizing CSS coverage
+
+**Why page root checks are thin**: A Figma page/screen frame usually has no fills, no layoutMode, no direct text → `background`, `layout`, `typography` all get skipped. The fix is to **test each section separately**, not the page as one unit.
+
+#### Three-level strategy
+
+| Level | What to test | checks to use | selector pattern |
+|---|---|---|---|
+| Page root | Background color, overflow clip, size | `['exists','size','background','overflow']` | `[data-testid="page-root"]` or `#storybook-root > *:visible` |
+| Sections (header, hero, sidebar, content) | Full CSS: bg, layout, radius, shadow, typography | `CHECKS_STRICT` or `CHECKS_CONTAINER` | `[data-testid="section-hero"]` |
+| Isolated text blocks (hero title, nav links) | Typography only | `['exists','size','typography','text']` | `[data-testid="hero-title"]` |
+
+**Never use `['exists','size']` for a page.** If you only have 2 checks, you're not testing CSS.
+
+#### Config pattern for a full page
+
+```js
+// cases[]: one entry per Figma section node
+{ name: 'landing-hero--default',    storyId: 'landing-page--default', figmaNodeId: 'HERO_NODE_ID',    figmaScale: 1, viewport: { width: 1440, height: 860 } },
+{ name: 'landing-features--default',storyId: 'landing-page--default', figmaNodeId: 'FEAT_NODE_ID',    figmaScale: 1, viewport: { width: 1440, height: 860 } },
+{ name: 'landing-cta--default',     storyId: 'landing-page--default', figmaNodeId: 'CTA_NODE_ID',     figmaScale: 1, viewport: { width: 1440, height: 860 } },
+
+// contractCases[]: selector targets each section inside the rendered page
+{ name: 'landing-hero--default',     checks: CHECKS_STRICT,     selector: '[data-testid="hero-section"]',     typographySelector: 'h1' },
+{ name: 'landing-features--default', checks: CHECKS_CONTAINER,  selector: '[data-testid="features-section"]' },
+{ name: 'landing-cta--default',      checks: CHECKS_STRICT,     selector: '[data-testid="cta-section"]',      typographySelector: 'h2' },
+```
+
+#### `typographySelector` — when to use it
+
+`typographySelector` is a CSS selector evaluated **inside** the section element. Use it when:
+- The section's first text node is a label/badge (wrong) but you want to check the heading typography
+- A section has multiple text styles and you want to pin to a specific one
+
+```js
+// Without typographySelector: checks the first text leaf found in the section (may be a nav item or badge)
+{ name: 'landing-hero--default', checks: CHECKS_STRICT, selector: '[data-testid="hero-section"]' }
+
+// With typographySelector: always measures the <h1> typography
+{ name: 'landing-hero--default', checks: CHECKS_STRICT, selector: '[data-testid="hero-section"]', typographySelector: 'h1' }
+```
+
+Figma side: `extractNodeSpec()` uses `firstTextNode()` from the section's Figma node (typically the heading) — aligns with `typographySelector: 'h1'`.
+
+#### How to find Figma section node IDs
+
+```bash
+source .env
+curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
+  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=PAGE_NODE_ID" \
+  | node -e "
+    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+    const page = Object.values(d.nodes)[0].document;
+    (page.children || []).forEach(child => {
+      console.log(child.id.replace(':','-'), child.name, child.type);
+    });
+  "
+```
+
+Each line is a section node ID + name. Use those IDs in `cases[].figmaNodeId`.
+
+#### What checks each section actually tests
+
+When `CHECKS_STRICT` runs on a section frame that has:
+- `fills` → `background` (backgroundColor)
+- `strokes` → `border` (width, color, style)
+- `effects` with DROP_SHADOW → `shadow` (presence, offsetX, offsetY, blur, color)
+- `cornerRadius > 0` → `radius` (borderRadius)
+- `layoutMode` HORIZONTAL/VERTICAL → `layout` (gap, padding x4, flexDirection, alignItems, justifyContent)
+- TEXT child anywhere → `typography` (fontFamily, fontWeight, fontSize, lineHeight, letterSpacing, textAlign, color)
+- `clipsContent` → `overflow`
+- `absoluteBoundingBox` → `size` (width, height)
+
+Checks with null expected values are **silently skipped** — so `CHECKS_STRICT` on a section that has no stroke won't fail the border check; it just doesn't run it. This is intentional: use the strictest set and let the spec drive which checks actually execute.
+
 ---
 
 ## Next step

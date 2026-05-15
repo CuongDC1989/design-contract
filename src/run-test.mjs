@@ -66,6 +66,9 @@ export async function runDesignContractTest(config) {
       continue;
     }
 
+    // Scroll element into view before measuring — required for below-the-fold sections in pages
+    await locator.scrollIntoViewIfNeeded().catch(() => {});
+
     const box = await locator.boundingBox();
     const text = (await locator.innerText()).trim();
     const typographySelector = item.typographySelector ?? null;
@@ -152,7 +155,21 @@ export async function runDesignContractTest(config) {
         track('border', 'borderStyle', expected.border.style, styles.borderStyle, styles.borderStyle === expected.border.style);
     }
     if (item.checks.includes('shadow') && expected.shadow) {
-      track('shadow', 'boxShadow', 'drop-shadow', styles.boxShadow === 'none' ? 'none' : 'present', styles.boxShadow !== 'none');
+      const hasShadow = styles.boxShadow !== 'none';
+      track('shadow', 'boxShadow', 'drop-shadow present', hasShadow ? 'present' : 'none', hasShadow);
+      if (hasShadow) {
+        const pxNums = styles.boxShadow.match(/-?\d+(?:\.\d+)?px/g);
+        if (pxNums && pxNums.length >= 3) {
+          const [sx, sy, sblur] = pxNums.map(n => parseFloat(n));
+          track('shadow', 'shadowOffsetX', `${expected.shadow.x}px`, `${sx}px`, nearlyEqual(sx, expected.shadow.x, 2));
+          track('shadow', 'shadowOffsetY', `${expected.shadow.y}px`, `${sy}px`, nearlyEqual(sy, expected.shadow.y, 2));
+          track('shadow', 'shadowBlur', `${expected.shadow.blur}px`, `${sblur}px`, nearlyEqual(sblur, expected.shadow.blur, 3));
+        }
+        const shadowColorMatch = styles.boxShadow.match(/rgba?\([^)]+\)/);
+        if (shadowColorMatch && expected.shadow.color) {
+          track('shadow', 'shadowColor', expected.shadow.color, shadowColorMatch[0], colorClose(shadowColorMatch[0], expected.shadow.color));
+        }
+      }
     }
     if (item.checks.includes('layout') && expected.layout) {
       for (const [property, actual, exp] of [
@@ -190,7 +207,8 @@ export async function runDesignContractTest(config) {
         track('typography', 'lineHeight', `${expected.typography.lineHeightPx}px`, styles.lineHeight, lh !== null && nearlyEqual(lh, expected.typography.lineHeightPx, 1));
       }
       if (expected.typography.letterSpacing != null) {
-        const ls = firstNumberPx(styles.letterSpacing);
+        // browsers return 'normal' for letter-spacing:0; treat 'normal' as 0px
+        const ls = styles.letterSpacing === 'normal' ? 0 : firstNumberPx(styles.letterSpacing);
         track('typography', 'letterSpacing', `${expected.typography.letterSpacing}px`, styles.letterSpacing, ls !== null && nearlyEqual(ls, expected.typography.letterSpacing, 1.5));
       }
       if (expected.typography.textAlign) {
