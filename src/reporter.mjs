@@ -160,7 +160,7 @@ function renderValue(val) {
   const s = String(val);
   const isColor = /^rgba?\(|^#[0-9a-f]{3,8}$/i.test(s.trim());
   if (isColor) {
-    return `<span class="color-swatch" style="background:${esc(s)}"></span><code>${esc(s)}</code>`;
+    return `<div class="val-inner"><span class="color-swatch" style="background:${esc(s)}"></span><code>${esc(s)}</code></div>`;
   }
   return `<code>${esc(s)}</code>`;
 }
@@ -258,8 +258,9 @@ code{font-family:'SFMono-Regular','Cascadia Code','Fira Code',monospace;font-siz
 
 .check-badge{font-size:10px;padding:2px 7px;border-radius:3px;background:rgba(255,255,255,.07);color:#8b949e;font-weight:600;text-transform:uppercase;white-space:nowrap;letter-spacing:.3px}
 .prop-name{font-family:'SFMono-Regular',monospace;font-size:12px;color:#c9d1d9}
-.val-cell{font-family:'SFMono-Regular',monospace;font-size:12px;display:flex;align-items:center;gap:6px}
+.val-cell{font-family:'SFMono-Regular',monospace;font-size:12px;vertical-align:middle}
 .val-cell code{background:transparent;padding:0;font-size:12px}
+.val-inner{display:flex;align-items:center;gap:6px}
 .val-cell.expected code{color:#2ea043}
 .val-cell.actual code{color:#f85149}
 .color-swatch{width:13px;height:13px;border-radius:3px;flex-shrink:0;border:1px solid rgba(255,255,255,.15);display:inline-block}
