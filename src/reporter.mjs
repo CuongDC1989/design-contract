@@ -113,17 +113,16 @@ function renderCase(r, config) {
   </div>
   <div class="case-body">
     ${r.errorMessage ? `<div class="error-msg">⚠ ${esc(r.errorMessage)}</div>` : ''}
-    ${r.failures && r.failures.length > 0 ? renderFailures(r.failures, r.screenshot) : ''}
-    ${r.status === 'pass' && r.screenshot ? `
-    <div class="pass-preview">
-      <div class="preview-label">Storybook snapshot</div>
-      <img src="data:image/png;base64,${r.screenshot}" class="preview-img" alt="${esc(r.name)}">
-    </div>` : ''}
+    ${r.details && r.details.length > 0
+      ? renderDetails(r.details, r.screenshot)
+      : r.failures && r.failures.length > 0
+        ? renderFailures(r.failures, r.screenshot)
+        : r.screenshot ? `<div class="pass-preview"><div class="preview-label">Storybook snapshot</div><img src="data:image/png;base64,${r.screenshot}" class="preview-img" alt="${esc(r.name)}"></div>` : ''}
   </div>
 </div>`;
 }
 
-function renderFailures(failures, screenshot) {
+function renderDetails(details, screenshot) {
   return `
 <div class="failures-wrap">
   ${screenshot ? `
@@ -135,6 +134,7 @@ function renderFailures(failures, screenshot) {
     <table class="failures-table">
       <thead>
         <tr>
+          <th></th>
           <th>Check</th>
           <th>Property</th>
           <th>Expected <span class="th-sub">(Figma)</span></th>
@@ -142,17 +142,22 @@ function renderFailures(failures, screenshot) {
         </tr>
       </thead>
       <tbody>
-        ${failures.map(f => `
-        <tr>
-          <td><span class="check-badge">${esc(f.check)}</span></td>
-          <td class="prop-name">${esc(f.property)}</td>
-          <td class="val-cell expected">${renderValue(f.expected)}</td>
-          <td class="val-cell actual">${renderValue(f.actual)}</td>
+        ${details.map(d => `
+        <tr class="${d.pass ? 'row-pass' : 'row-fail'}">
+          <td class="row-icon">${d.pass ? '<span class="ri pass">✓</span>' : '<span class="ri fail">✗</span>'}</td>
+          <td><span class="check-badge">${esc(d.check)}</span></td>
+          <td class="prop-name">${esc(d.property)}</td>
+          <td class="val-cell expected">${renderValue(d.expected)}</td>
+          <td class="val-cell actual ${d.pass ? 'match' : ''}">${renderValue(d.actual)}</td>
         </tr>`).join('')}
       </tbody>
     </table>
   </div>
 </div>`;
+}
+
+function renderFailures(failures, screenshot) {
+  return renderDetails(failures.map(f => ({ ...f, pass: false })), screenshot);
 }
 
 function renderValue(val) {
@@ -263,8 +268,15 @@ code{font-family:'SFMono-Regular','Cascadia Code','Fira Code',monospace;font-siz
 .val-inner{display:flex;align-items:center;gap:6px}
 .val-cell.expected code{color:#2ea043}
 .val-cell.actual code{color:#f85149}
+.val-cell.actual.match code{color:#2ea043}
 .color-swatch{width:13px;height:13px;border-radius:3px;flex-shrink:0;border:1px solid rgba(255,255,255,.15);display:inline-block}
 .dim{color:#484f58}
+.row-icon{width:24px;text-align:center;padding:9px 4px 9px 12px}
+.ri{font-size:11px;font-weight:700}
+.ri.pass{color:#2ea043}
+.ri.fail{color:#f85149}
+.row-pass td{opacity:.75}
+.row-pass:hover td{opacity:1}
 
 /* Error */
 .error-msg{padding:12px 16px;font-family:monospace;font-size:13px;color:#d29922;background:rgba(210,153,34,.07);border-bottom:1px solid #21262d}
