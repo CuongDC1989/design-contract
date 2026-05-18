@@ -152,13 +152,34 @@ Defines which groups of CSS properties are compared against the Figma spec. Use 
 | `background` | `backgroundColor` (as `rgba(…)`) | First solid `fills` paint |
 | `border` | `borderWidth`, `borderColor`, `borderStyle` | `strokes`, `strokeWeight`, `strokeDashes` |
 | `radius` | `borderRadius` | `cornerRadius` / `rectangleCornerRadii` |
-| `shadow` | `boxShadow` (presence only) | First `DROP_SHADOW` effect |
+| `shadow` | `boxShadow` — presence, offset X/Y, blur radius, and color | First `DROP_SHADOW` effect |
 | `opacity` | `opacity` | `opacity` |
 | `blend` | `mixBlendMode` | `blendMode` |
 | `layout` | `gap`, `paddingTop/Right/Bottom/Left`, `flexDirection`, `alignItems`, `justifyContent`, `flexWrap` | `layoutMode`, `itemSpacing`, `padding*`, `*AxisAlignItems`, `layoutWrap` |
 | `typography` | `fontFamily`, `fontWeight`, `fontSize`, `lineHeight`, `letterSpacing`, `textAlign`, `color`, `textDecoration`, `textTransform`, `fontStyle` | First `TEXT` node found inside the Figma node (`style` object) |
 | `text` | `innerText` contains the Figma text value | `characters` of the first text node |
 | `overflow` | `overflow` | `clipsContent` |
+
+#### Bidirectional verification
+
+Several check types verify in **both directions** — they catch mismatches whether the property is present or absent:
+
+| Check | Figma HAS property | Figma has NO property |
+|---|---|---|
+| `background` | Browser `backgroundColor` must match Figma fill color | Browser must have transparent background (`rgba(0,0,0,0)`) |
+| `border` | Browser `borderWidth`/color/style must match Figma stroke | Browser must have no border (`borderWidth: 0px`) |
+| `shadow` | Browser `boxShadow` must match offset, blur, and color | Browser must have no `box-shadow` |
+| `radius` | Browser `borderRadius` must match Figma `cornerRadius` | Browser must have no border radius |
+
+This means you can **use a check to guarantee absence**, not just presence. For example, if you want to verify that a component has no drop shadow:
+
+```js
+// Figma node has no shadow effect.
+// Including 'shadow' will fail if the browser has any box-shadow.
+{ name: 'my-card', checks: ['exists', 'size', 'background', 'shadow'], selector: '[data-testid="my-card"]' }
+```
+
+This is useful for catching accidental CSS leaking in from parent styles or utility classes.
 
 **How to choose:**
 

@@ -138,37 +138,54 @@ export async function runDesignContractTest(config) {
     if (item.checks.includes('exists')) {
       track('exists', 'element', 'visible', box ? 'visible' : 'not found', !!box);
     }
-    if (item.checks.includes('background') && expected.backgroundColorRgba) {
-      const pass = colorClose(styles.backgroundColor, expected.backgroundColorRgba);
-      track('background', 'backgroundColor', expected.backgroundColorRgba, styles.backgroundColor, pass);
+    if (item.checks.includes('background')) {
+      if (expected.backgroundColorRgba) {
+        const pass = colorClose(styles.backgroundColor, expected.backgroundColorRgba);
+        track('background', 'backgroundColor', expected.backgroundColorRgba, styles.backgroundColor, pass);
+      } else {
+        // reverse: Figma has no fill → browser must be transparent
+        const isTransparent = styles.backgroundColor === 'rgba(0, 0, 0, 0)';
+        track('background', 'backgroundColor', 'transparent (no figma fill)', styles.backgroundColor, isTransparent);
+      }
     }
     if (item.checks.includes('opacity') && typeof expected.opacity === 'number') {
       const actual = Number.parseFloat(styles.opacity);
       const pass = Number.isFinite(actual) && nearlyEqual(actual, expected.opacity, 0.08);
       track('opacity', 'opacity', String(expected.opacity), styles.opacity, pass);
     }
-    if (item.checks.includes('border') && expected.border) {
-      const w = firstNumberPx(styles.borderWidth);
-      track('border', 'borderWidth', `${expected.border.width}px`, styles.borderWidth, w !== null && nearlyEqual(w, expected.border.width, 1.5));
-      track('border', 'borderColor', expected.border.color, styles.borderColor, colorClose(styles.borderColor, expected.border.color));
-      if (expected.border.style)
-        track('border', 'borderStyle', expected.border.style, styles.borderStyle, styles.borderStyle === expected.border.style);
+    if (item.checks.includes('border')) {
+      if (expected.border) {
+        const w = firstNumberPx(styles.borderWidth);
+        track('border', 'borderWidth', `${expected.border.width}px`, styles.borderWidth, w !== null && nearlyEqual(w, expected.border.width, 1.5));
+        track('border', 'borderColor', expected.border.color, styles.borderColor, colorClose(styles.borderColor, expected.border.color));
+        if (expected.border.style)
+          track('border', 'borderStyle', expected.border.style, styles.borderStyle, styles.borderStyle === expected.border.style);
+      } else {
+        // reverse: Figma has no stroke → browser must have no border
+        const w = firstNumberPx(styles.borderWidth);
+        track('border', 'borderWidth', '0px (no figma stroke)', styles.borderWidth, w !== null && nearlyEqual(w, 0, 0.5));
+      }
     }
-    if (item.checks.includes('shadow') && expected.shadow) {
-      const hasShadow = styles.boxShadow !== 'none';
-      track('shadow', 'boxShadow', 'drop-shadow present', hasShadow ? 'present' : 'none', hasShadow);
-      if (hasShadow) {
-        const pxNums = styles.boxShadow.match(/-?\d+(?:\.\d+)?px/g);
-        if (pxNums && pxNums.length >= 3) {
-          const [sx, sy, sblur] = pxNums.map(n => parseFloat(n));
-          track('shadow', 'shadowOffsetX', `${expected.shadow.x}px`, `${sx}px`, nearlyEqual(sx, expected.shadow.x, 2));
-          track('shadow', 'shadowOffsetY', `${expected.shadow.y}px`, `${sy}px`, nearlyEqual(sy, expected.shadow.y, 2));
-          track('shadow', 'shadowBlur', `${expected.shadow.blur}px`, `${sblur}px`, nearlyEqual(sblur, expected.shadow.blur, 3));
+    if (item.checks.includes('shadow')) {
+      if (expected.shadow) {
+        const hasShadow = styles.boxShadow !== 'none';
+        track('shadow', 'boxShadow', 'drop-shadow present', hasShadow ? 'present' : 'none', hasShadow);
+        if (hasShadow) {
+          const pxNums = styles.boxShadow.match(/-?\d+(?:\.\d+)?px/g);
+          if (pxNums && pxNums.length >= 3) {
+            const [sx, sy, sblur] = pxNums.map(n => parseFloat(n));
+            track('shadow', 'shadowOffsetX', `${expected.shadow.x}px`, `${sx}px`, nearlyEqual(sx, expected.shadow.x, 2));
+            track('shadow', 'shadowOffsetY', `${expected.shadow.y}px`, `${sy}px`, nearlyEqual(sy, expected.shadow.y, 2));
+            track('shadow', 'shadowBlur', `${expected.shadow.blur}px`, `${sblur}px`, nearlyEqual(sblur, expected.shadow.blur, 3));
+          }
+          const shadowColorMatch = styles.boxShadow.match(/rgba?\([^)]+\)/);
+          if (shadowColorMatch && expected.shadow.color) {
+            track('shadow', 'shadowColor', expected.shadow.color, shadowColorMatch[0], colorClose(shadowColorMatch[0], expected.shadow.color));
+          }
         }
-        const shadowColorMatch = styles.boxShadow.match(/rgba?\([^)]+\)/);
-        if (shadowColorMatch && expected.shadow.color) {
-          track('shadow', 'shadowColor', expected.shadow.color, shadowColorMatch[0], colorClose(shadowColorMatch[0], expected.shadow.color));
-        }
+      } else {
+        // reverse: Figma has no shadow → browser must have no box-shadow
+        track('shadow', 'boxShadow', 'none (no figma shadow)', styles.boxShadow, styles.boxShadow === 'none');
       }
     }
     if (item.checks.includes('layout') && expected.layout) {
@@ -249,9 +266,15 @@ export async function runDesignContractTest(config) {
     if (item.checks.includes('blend') && expected.blendMode) {
       track('blend', 'mixBlendMode', expected.blendMode, styles.mixBlendMode, styles.mixBlendMode === expected.blendMode);
     }
-    if (item.checks.includes('radius') && expected.cornerRadius !== null) {
-      const r = firstNumberPx(styles.borderRadius);
-      track('radius', 'borderRadius', `${expected.cornerRadius}px`, styles.borderRadius, r !== null && nearlyEqual(r, expected.cornerRadius, 2));
+    if (item.checks.includes('radius')) {
+      if (expected.cornerRadius !== null) {
+        const r = firstNumberPx(styles.borderRadius);
+        track('radius', 'borderRadius', `${expected.cornerRadius}px`, styles.borderRadius, r !== null && nearlyEqual(r, expected.cornerRadius, 2));
+      } else {
+        // reverse: Figma has no cornerRadius → browser should have no radius
+        const r = firstNumberPx(styles.borderRadius);
+        track('radius', 'borderRadius', '0px (no figma radius)', styles.borderRadius, r !== null && nearlyEqual(r, 0, 0.5));
+      }
     }
     if (item.checks.includes('text') && expected.text) {
       const pass = text.includes(expected.text);

@@ -151,6 +151,30 @@ Anything else
   → custom array: ['exists', 'size', 'layout', 'typography']
 ```
 
+### ⚠️ Bidirectional checks — reverse verification
+
+Every check type now runs in **both directions**. When a check is included in `checks[]`, the engine verifies:
+
+| Figma has property | Browser has property | Result |
+|---|---|---|
+| ✅ yes | ✅ yes, matches | **PASS** |
+| ✅ yes | ❌ no / mismatch | **FAIL** — missing from browser |
+| ❌ no | ❌ no | **PASS** |
+| ❌ no | ✅ yes | **FAIL** — browser has extra property Figma doesn't |
+
+This means **including a check type catches both missing AND extra properties**. For example, including `'shadow'` will:
+- Catch if browser is missing a shadow Figma has (forward)
+- Catch if browser has a shadow Figma doesn't have (reverse)
+
+**Practical implication when choosing checks:** Even if the Figma node has NO shadow/border/background, you should still include those checks if you want to guarantee the browser also has none. Use this to prevent accidental CSS leaking in from parent styles or Tailwind defaults.
+
+| You want to guarantee | Include in checks |
+|---|---|
+| Component has no `box-shadow` | `'shadow'` |
+| Component has no `border` | `'border'` |
+| Component has no fill / transparent background | `'background'` |
+| Component has no `border-radius` | `'radius'` |
+
 **Rule:** Always choose the strictest named set that fully covers the available properties.  
 A component with `hasFill + hasRadius + hasLayout + hasTypography` → `CHECKS_STRICT`, not `CHECKS_CONTAINER`.  
 Never downgrade to a looser set just because the component "looks simple".
