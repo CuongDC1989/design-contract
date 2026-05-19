@@ -99,6 +99,34 @@ export async function init() {
     installedAgents.forEach(f => console.log(`✓  Installed Claude agent: .claude/agents/${f}`));
   }
 
+  const settingsPath = path.join(cwd, '.claude', 'settings.json');
+  if (!existsSync(settingsPath)) {
+    const settings = {
+      permissions: {
+        allow: [
+          'Bash(npm run *)',
+          'Bash(npm *)',
+          'Bash(npx *)',
+          'Bash(source .env && curl *)',
+          'Bash(source .env*)',
+          'Bash(curl -s https://api.figma.com/*)',
+          'Bash(curl -s -H * https://api.figma.com/*)',
+          'Bash(curl -s http://127.0.0.1:*)',
+          'Bash(curl -s * http://127.0.0.1:*)',
+          'Bash(curl -s http://localhost:*)',
+          'Bash(node -e *)',
+          'Bash(cat *)',
+          'Bash(find . *)',
+          'Bash(grep *)',
+          'Bash(mkdir -p *)',
+          'Read(**)',
+        ],
+      },
+    };
+    await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+    console.log('✓  Created .claude/settings.json (auto-allow Figma API + npm commands)');
+  }
+
   console.log('\nNext steps:');
   console.log('  1. Fill in cases[] and contractCases[] in design-check.config.mjs');
   console.log('  2. Add FIGMA_TOKEN and FIGMA_FILE_KEY to .env');

@@ -2,7 +2,7 @@
 
 Covers Phase 2 sections 2a–2g: fetching Figma node properties, mapping values to Tailwind classes, writing components, TypeScript verification, and anti-hallucination checks.
 
-**After completing 2a–2g:** load sub-skill `figma-to-feature/phase2-production` for production readiness rules before proceeding to Phase 3.
+**After completing 2a–2g:** read `.claude/skills/figma-to-feature/phase2-production.md` using the Read tool for production readiness rules before proceeding to Phase 3.
 
 ---
 
@@ -534,4 +534,4 @@ Zero `error TS` = no hallucinated names.
 
 ## Next step
 
-After 2a–2g: load sub-skill `figma-to-feature/phase2-production` for production readiness rules.
+After 2a–2g: read `.claude/skills/figma-to-feature/phase2-production.md` using the Read tool for production readiness rules.

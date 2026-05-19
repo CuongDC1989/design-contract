@@ -8,15 +8,15 @@ Generate a complete feature page — React components + Storybook stories + desi
 
 ## Workflow overview
 
-| Phase | What happens | Sub-skill to load |
+| Phase | What happens | File to read |
 |---|---|---|
 | 1 — Discovery | Read project state, fetch Figma page tree, build component map | _(this file — run in full)_ |
-| 2a — Implementation | Fetch node props, screenshot, map Tailwind, confirm plan, spawn `frontend-developer` agent | `figma-to-feature/phase2-fetch` |
-| 2h — Production | Review generated code against production rules (text, states, forms, animation…) | `figma-to-feature/phase2-production` |
-| 3 — Story + Config | Create stories, update design-check.config.mjs | `figma-to-feature/phase3-story` |
-| 4+5 — Iteration & Repair | Fix failing tests, repair mode, telemetry | `figma-to-feature/phase4-repair` |
+| 2a — Implementation | Fetch node props, screenshot, map Tailwind, confirm plan, spawn `frontend-developer` agent | `.claude/skills/figma-to-feature/phase2-fetch.md` |
+| 2h — Production | Review generated code against production rules (text, states, forms, animation…) | `.claude/skills/figma-to-feature/phase2-production.md` |
+| 3 — Story + Config | Create stories, update design-check.config.mjs | `.claude/skills/figma-to-feature/phase3-story.md` |
+| 4+5 — Iteration & Repair | Fix failing tests, repair mode, telemetry | `.claude/skills/figma-to-feature/phase4-repair.md` |
 
-**Loading instruction:** When transitioning between phases, invoke the Skill tool with the sub-skill name above. Do not proceed to the next phase without loading the corresponding sub-skill first.
+**Loading instruction:** When transitioning between phases, use the **Read tool** to read the file listed above. Do not use the Skill tool for these — they are context files, not standalone skills. Load the file, then follow its instructions before continuing.
 
 ---
 
@@ -201,12 +201,12 @@ find src/components/ui -name "*.tsx" ! -name "*.stories.tsx" 2>/dev/null | sed '
 
 Phase 1 is complete. Before starting implementation:
 
-**Load sub-skill:** invoke `figma-to-feature/phase2-fetch`
+**Load phase file:** use the Read tool to read `.claude/skills/figma-to-feature/phase2-fetch.md`
 
-That sub-skill covers:
+That file covers:
 - Fetching detailed Figma node properties (2a scripts)
 - Tailwind class mapping tables (2c)
 - Writing the component (2e)
 - TypeScript check + anti-hallucination (2f, 2g)
 
-After 2a–2g, load `figma-to-feature/phase2-production` for production rules (2h) before moving to Phase 3.
+After 2a–2g, read `.claude/skills/figma-to-feature/phase2-production.md` for production rules (2h) before moving to Phase 3.

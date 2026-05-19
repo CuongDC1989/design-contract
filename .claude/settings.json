@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(source .env && curl *)",
+      "Bash(source .env*)",
+      "Bash(curl -s https://api.figma.com/*)",
+      "Bash(curl -s -H * https://api.figma.com/*)",
+      "Bash(curl -s http://127.0.0.1:*)",
+      "Bash(curl -s * http://127.0.0.1:*)",
+      "Bash(curl -s http://localhost:*)",
+      "Bash(node -e *)",
+      "Bash(cat *)",
+      "Bash(find . *)",
+      "Bash(grep *)",
+      "Bash(mkdir -p *)",
+      "Read(**)"
+    ]
+  }
+}

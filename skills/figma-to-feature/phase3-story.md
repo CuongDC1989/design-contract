@@ -2,7 +2,7 @@
 
 Covers Phase 3: creating Storybook stories and updating design-check.config.mjs.
 
-**After completing Phase 3:** load sub-skill `figma-to-feature/phase4-repair` to start the iteration loop.
+**After completing Phase 3:** read `.claude/skills/figma-to-feature/phase4-repair.md` using the Read tool to start the iteration loop.
 
 ---
 
@@ -251,4 +251,4 @@ Checks with null expected values are **silently skipped** — so `CHECKS_STRICT`
 
 ## Next step
 
-After Phase 3: load sub-skill `figma-to-feature/phase4-repair` to begin the iteration loop.
+After Phase 3: read `.claude/skills/figma-to-feature/phase4-repair.md` using the Read tool to begin the iteration loop.

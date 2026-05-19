@@ -2,6 +2,17 @@
 
 Create React component stories wired to design-contract testing. Supports single-component and full-audit batch modes.
 
+## Goal
+
+**Maximum coverage, not maximum pass rate.**
+
+The definition of success is: every component has a story, and every story compares as many CSS properties against Figma as possible. A test that fails because the component diverges from Figma is doing its job correctly — it surfaces a real discrepancy. A test that passes because checks were reduced is a false negative.
+
+- **Good outcome**: 20 components tested, 5 failing → the 5 failures are real bugs to fix
+- **Bad outcome**: 20 components tested, 20 passing → but 8 of them had checks removed to force a pass
+
+When in doubt, add more checks, not fewer.
+
 ---
 
 ## Execution Rules
@@ -15,6 +26,20 @@ Create React component stories wired to design-contract testing. Supports single
 **No assumptions** — Figma node ID not provided? Ask. Component has no clear root element? Ask. Do not pick a node ID by guessing from the Figma URL structure.
 
 **Config changes are additive** — Only append to `cases[]` and `contractCases[]`. Never reformat, reorder, or touch existing entries.
+
+**Stories go in `stories/` subfolder** — Never place `.stories.tsx` next to the component file. Always create `[ComponentDir]/stories/ComponentName.stories.tsx`. Create the `stories/` directory if it doesn't exist.
+
+**Wire all gaps, not some** — Mode B must process EVERY component in the gap report. Do not ask "which ones?" — print the full list, confirm node IDs for all, then proceed in order. Never stop partway through.
+
+**Never declare done early** — A batch run is only complete when Step 5e (final audit) confirms zero remaining gaps. Do not mark the task done after the last component's Step 4 — always run the final audit first.
+
+**One component at a time, fully** — In batch mode, complete all steps (0c → 1 → 2 → 3 → 4) for one component before moving to the next. Do not interleave. Show progress: `[1/5] Wiring LoginCard...` before each component starts.
+
+**Fetch deep, not shallow** — Figma components may be nested 3–5 levels deep. Always use `depth=4` or the recursive walk to discover nested nodes. Never stop at `depth=2`.
+
+**Maximize checks, never reduce to pass** — A failing test means the component diverges from Figma. Fix the component, not the checks. Only remove a check when the Figma node structurally cannot be compared (e.g., a wrapper frame with no fill, a table row using table-layout). Never remove a check because the test is hard to fix or the difference looks small.
+
+**Coverage over pass rate** — The metric is how many components are tested and how many Figma properties are compared, not how many tests pass. A red test suite with full coverage is better than a green suite with reduced checks.
 
 ---
 
@@ -35,14 +60,18 @@ If missing, create it now:
       "Bash(npm run *)",
       "Bash(npm *)",
       "Bash(npx *)",
-      "Bash(curl -s * https://api.figma.com/*)",
+      "Bash(source .env && curl *)",
+      "Bash(source .env*)",
+      "Bash(curl -s https://api.figma.com/*)",
       "Bash(curl -s -H * https://api.figma.com/*)",
       "Bash(curl -s http://127.0.0.1:*)",
       "Bash(curl -s * http://127.0.0.1:*)",
+      "Bash(curl -s http://localhost:*)",
       "Bash(node -e *)",
       "Bash(cat *)",
       "Bash(find . *)",
       "Bash(grep *)",
+      "Bash(mkdir -p *)",
       "Read(**)"
     ]
   }
@@ -51,10 +80,12 @@ If missing, create it now:
 
 These rules cover:
 - `npm run *` / `npm *` / `npx *` — running build, test, storybook, and figma:spec scripts
-- `curl * https://api.figma.com/*` — fetching Figma node trees and properties (Steps 0b, 0c)
-- `curl * http://127.0.0.1:*` — reading Storybook's `/index.json` and story iframes (Step 5b)
+- `source .env && curl *` — Figma API calls preceded by env loading (most common pattern in Steps 0b, 0c)
+- `curl -s -H * https://api.figma.com/*` — standalone Figma API calls
+- `curl -s http://127.0.0.1:*` / `curl -s http://localhost:*` — reading Storybook's `/index.json` (Step 5b)
 - `node -e *` — inline JSON parsing of Figma API responses
 - `cat *` / `find . *` / `grep *` — discovery and config inspection (Step 0)
+- `mkdir -p *` — creating story subdirectories
 - `Read(**)` — reading all project files without prompting
 
 Once the file exists, all of the above run without confirmation prompts for the rest of the session.
@@ -82,6 +113,8 @@ Build a mental map:
 - **Story files**: which components already have a `.stories.tsx`
 - **Gaps**: components with a story but no contract case, or components with no story at all
 
+**Lock the gap list.** After Step 0, write out the complete gap list. This becomes the committed work list — every item on it must be completed. Do not add or remove items mid-run without user confirmation.
+
 ---
 
 ## Step 0b — Fetch Figma node tree (auto node ID discovery)
@@ -99,23 +132,29 @@ curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
   "
 ```
 
-**2. Get top-level frames on a page** (replace `PAGE_ID` with the ID from step 1):
+**2. Get top-level frames on a page** (replace `PAGE_ID` with the ID from step 1) — use `depth=4` to catch nested components:
 
 ```bash
 curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=PAGE_ID&depth=2" \
+  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=PAGE_ID&depth=4" \
   | node -e "
     const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
     const page = Object.values(d.nodes)[0].document;
-    page.children.forEach(n => console.log(n.id, n.name, n.type));
+    function walk(node, depth) {
+      if (['COMPONENT', 'COMPONENT_SET', 'FRAME'].includes(node.type)) {
+        console.log(' '.repeat(depth*2) + node.id + '  ' + node.name + '  [' + node.type + ']');
+      }
+      (node.children || []).forEach(c => walk(c, depth+1));
+    }
+    page.children.forEach(n => walk(n, 0));
   "
 ```
 
-**3. Search children of a specific frame** (replace `FRAME_ID` to drill deeper):
+**3. Deep recursive walk of a specific frame** (replace `FRAME_ID` — use when components are nested 3+ levels deep):
 
 ```bash
 curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=FRAME_ID&depth=3" \
+  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=FRAME_ID&depth=5" \
   | node -e "
     const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
     function walk(node, depth) {
@@ -125,6 +164,8 @@ curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
     Object.values(d.nodes).forEach(n => walk(n.document, 0));
   "
 ```
+
+**If a component cannot be found after depth=5:** Fetch the file root with `depth=1` to list all pages, then repeat step 2 for each page. Components may live on a different page than expected.
 
 **Matching strategy:**
 - Compare Figma frame/component names to React component names (case-insensitive, ignore spaces/dashes)
@@ -232,9 +273,34 @@ This means **including a check type catches both missing AND extra properties**.
 | Component has no fill / transparent background | `'background'` |
 | Component has no `border-radius` | `'radius'` |
 
-**Rule:** Always choose the strictest named set that fully covers the available properties.  
-A component with `hasFill + hasRadius + hasLayout + hasTypography` → `CHECKS_STRICT`, not `CHECKS_CONTAINER`.  
-Never downgrade to a looser set just because the component "looks simple".
+**Rule:** Always choose the strictest named set possible. When in doubt, go stricter — a failing test reveals a real discrepancy; a passing test from a loose check set hides one.
+
+- A component with `hasFill + hasRadius + hasLayout + hasTypography` → `CHECKS_STRICT`, not `CHECKS_CONTAINER`
+- A component with `hasFill + hasRadius` only (no layout/typography) → still try `CHECKS_STRICT` first; downgrade only if the Figma node structurally lacks those properties
+- Never choose a looser set because the component "looks simple" or "probably won't have layout issues"
+
+---
+
+## Step 0d — Mandatory gate: resolve ALL node IDs before writing any file
+
+**This gate must be passed before touching any component, story, or config file.**
+
+1. List every gap from Step 0
+2. For each gap, check whether Step 0b produced a matched Figma node ID
+3. If any gap has no node ID → stop and ask the user before continuing (do not guess)
+4. Once every gap has a confirmed node ID → print the confirmed list and proceed
+
+Print the confirmed list in this format:
+```
+Gap list — N components to wire:
+[1/N] ComponentName       figma: XXXX-XXXX   ✓ matched
+[2/N] ComponentName2      figma: XXXX-YYYY   ✓ matched
+[3/N] ComponentName3      figma: (no match)  ← needs node ID from user
+```
+
+**Do not start Step 1 for any component until every row in this list has a node ID.**
+
+If the user provides node IDs for the unmatched components, update the list and confirm again before proceeding.
 
 ---
 
@@ -266,9 +332,25 @@ Still run Step 0c to determine checks before writing config.
 - PlanBadge ✓
 ```
 
-3. Ask the user: "Which components should I wire up? I'll need the Figma node ID for each."
-4. For each confirmed component+nodeId pair, run Steps 0c → 1 → 2 → 3 → 4 in sequence.
-5. After all components are done, run Step 5 (verify).
+3. Run Step 0b to discover Figma node IDs for all gaps. Then run Step 0d (mandatory gate) — resolve ALL node IDs before writing anything.
+4. Announce: "Wiring all N gaps in order. Starting with [ComponentName]..."
+5. For each gap in sequence, show progress and complete all steps:
+   ```
+   [1/N] Wiring ComponentName...
+     → Step 0c: fetch Figma node properties
+     → Step 1: add data-testid
+     → Step 2: create story file
+     → Step 3: choose config values
+     → Step 4: update config + design-spec.json
+     ✓ ComponentName done
+
+   [2/N] Wiring ComponentName2...
+   ...
+   ```
+6. Only move to the next component after the current one's Step 4 is confirmed complete.
+7. After all N components are done, run Step 5 (verify) then Step 5e (final completeness audit).
+
+**Do not ask "which components should I wire?" — wire all of them.** If the user wants to exclude a component, they will say so. Otherwise, proceed with the full gap list.
 
 ---
 
@@ -315,9 +397,21 @@ When flattening is possible (outer wrapper exists only for relative positioning)
 
 **Check first:** If a `.stories.tsx` already exists for this component, read it and check if it needs a new export (variant). If it's already correct, skip to Step 3.
 
-**File location:** Colocate with the component in a `stories/` subfolder.
-- `src/features/users/UsersPage.tsx` → `src/features/users/stories/UsersPage.stories.tsx`
-- `src/components/ui/Badge.tsx` → `src/components/ui/stories/Badge.stories.tsx`
+**File location:** Always create story files in a dedicated `stories/` subdirectory alongside the component — never in the same directory as the component file itself.
+
+```
+src/features/users/
+  UsersPage.tsx                          ← component
+  stories/
+    UsersPage.stories.tsx                ← story here, not next to component
+
+src/components/ui/
+  Badge.tsx                              ← component
+  stories/
+    Badge.stories.tsx                    ← story here, not next to component
+```
+
+**Rule:** If `stories/` does not exist yet, create it with `mkdir -p`. Never place `.stories.tsx` files in the same folder as `.tsx` component files.
 
 **Story ID format:** `[feature]-[componentname]--[variant]`
 - Title `Users/UsersPage` → story ID `users-userspage--default`
@@ -710,27 +804,67 @@ After all checks pass:
 - Open Storybook (`npm run storybook`) and visually verify each new story renders without errors
 - Run `npm run test:design` after Storybook is running
 
+### 5e — Final completeness audit (required for batch Mode B)
+
+Re-run discovery to confirm every gap from Step 0 is now closed:
+
+```bash
+# Current config entries
+grep "name:" design-check.config.mjs
+
+# Current story files
+find src -name "*.stories.tsx"
+```
+
+Cross-check against the original gap list from Step 0. Print the result:
+
+```
+Final audit — N components:
+[1/N] LoginCard       story ✓   cases ✓   contractCases ✓
+[2/N] StatusBadge     story ✓   cases ✓   contractCases ✓
+[3/N] AvatarCell      story ✓   cases ✓   contractCases ✓
+...
+All N gaps closed. ✓
+```
+
+If any row is missing a checkmark:
+- Return to Step 0c for that component
+- Complete Steps 1 → 4
+- Re-run Step 5e until every row is fully checked
+
+**Do not declare the task done until every gap shows `story ✓   cases ✓   contractCases ✓`.**
+
 ---
 
 ## Troubleshooting failing tests
 
-### Rule: fix component code, not checks
+### Rule: a failing test is signal — read it, don't silence it
 
-When a test fails, the default action is to **fix the component to match Figma**, not to reduce `checks`. Reducing checks means the test passes but the bug survives. Only reduce or skip a check when the mismatch is fundamentally incomparable — see valid exceptions below.
+A test failure means the component's rendered CSS does not match the Figma spec. The correct response is always to **fix the component**, not to remove the check. Removing a check makes the test green but leaves the discrepancy in production.
 
-**Valid reasons to skip or reduce a check:**
+**When a test fails:**
+1. Read the failure output — it tells you exactly which property mismatches and by how much
+2. Go to the Figma node and verify the expected value
+3. Fix the component CSS to match
+4. Re-run the test
 
-| Situation | Action |
-|---|---|
-| Figma node is a **wrapper frame** with null background/radius (no fill, no border) but the React component root has those properties | Remove `'background'` / `'radius'` — the checks compare the wrong layer |
-| Component has **dynamic/content-dependent width** (pagination controls, dynamic lists) | Skip `'size'` — width will never reliably match a Figma static snapshot |
-| Figma node is a **full-page frame** root with no fills/layout | Reduce to `['exists','size','background','overflow']` for the root only — test each section separately with `CHECKS_STRICT` |
-| A `<tr>` element uses **table layout, not flex** | Skip `'layout'` (alignItems/gap don't apply to table rows) |
+**Do not reduce `checks` unless the comparison is structurally impossible** (see the narrow exceptions below). Never reduce checks because the test is hard to fix, the diff looks small, or the component "looks fine visually".
 
-**Invalid reasons to reduce checks:**
-- "The test is hard to fix" → fix the component instead
-- "The difference is small" → fix it
-- "The component looks right visually" → Figma is the source of truth
+**The only valid reasons to remove a check — all others are invalid:**
+
+| Situation | Why it's a structural impossibility | Action |
+|---|---|---|
+| Figma node is a **wrapper frame** with `null` background/radius, but the selector targets the React root which has those properties | Wrong Figma layer — the check compares properties that don't exist in Figma for this node | Move `figmaNodeId` to the correct inner node, or split into two contract cases |
+| Component has **dynamic/content-dependent width** (pagination dots, dynamic tag lists) | The rendered width changes with data — a static Figma frame width can never match | Remove `'size'` only — keep all other checks |
+| Figma node is a **full-page root frame** with no fills, no layout | The page root frame has nothing to compare — sections do | Keep root as `['exists','size','background','overflow']` and add `CHECKS_STRICT` entries for each section |
+| A `<tr>` element uses **table layout, not flexbox** | `alignItems`/`gap` have no meaning on table rows | Remove `'layout'` for this specific row — keep size, background, typography |
+
+**Invalid reasons — never accept these as justification:**
+- "The test is hard to fix" → fix the component
+- "The difference is small (1–2px)" → fix the component (or widen Figma tolerance)
+- "The component looks right visually" → Figma is the source of truth, not the eye
+- "Other components pass without this check" → each component is checked against its own Figma node
+- "The designer said it's fine" → update the Figma node to reflect approval, then re-run
 
 ---
 
