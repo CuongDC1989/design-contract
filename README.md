@@ -414,59 +414,59 @@ Running `npx design-check init` installs skills and agents into `.claude/skills/
 
 ### `/figma-to-feature`
 
-**Dùng khi:** bạn có một Figma page và muốn triển khai toàn bộ thành code production — từ components, Storybook stories, đến design-contract tests — và iterate cho đến khi tất cả tests pass.
+**Use when:** you have a Figma page and want to implement the full feature — components, Storybook stories, and design-contract tests — iterating until all tests pass.
 
-**Làm gì:**
-1. Đọc project state, fetch Figma page tree, build component map có confidence scoring
-2. Detect design system (Radix, shadcn, MUI…) và reuse existing components
-3. Fetch node props + screenshot, map Tailwind classes, trình plan cho user confirm
-4. Spawn `frontend-developer` agent để viết từng component
-5. Review production readiness (async states, i18n, forms, animation…)
-6. Tạo Storybook stories + cập nhật `design-check.config.mjs`
-7. Chạy tests, diagnose failures, repair cho đến khi pass
+**What it does:**
+1. Reads project state, fetches Figma page tree, builds a component map with confidence scoring
+2. Detects the design system (Radix, shadcn, MUI…) and reuses existing components
+3. Fetches node props + screenshot, maps Tailwind classes, presents the plan for confirmation
+4. Spawns the `frontend-developer` agent to write each component
+5. Reviews production readiness (async states, i18n, forms, animations…)
+6. Creates Storybook stories and updates `design-check.config.mjs`
+7. Runs tests, diagnoses failures, and repairs until all pass
 
-**Không dùng khi:** bạn chỉ cần viết nhanh một component đơn lẻ không cần test → dùng `/figma-to-component`.
+**Don't use when:** you only need to generate a single component without tests → use `/figma-to-component` instead.
 
 ---
 
 ### `/figma-to-component`
 
-**Dùng khi:** bạn có một Figma URL hoặc node ID cụ thể và chỉ cần code của component đó — nhanh, không cần stories hay test config.
+**Use when:** you have a specific Figma URL or node ID and only need the component code — fast, no stories or test config required.
 
-**Làm gì:**
-1. Nhận Figma URL / node ID từ user
-2. Detect Figma data source (MCP hoặc REST API)
-3. Extract design context: layout, fills, typography, screenshot
-4. Phân tích và tạo implementation plan, trình user confirm
-5. Hỏi model muốn dùng (default: `claude-sonnet-4-6`)
-6. Spawn `frontend-developer` agent để generate component
-7. Verify TypeScript, tạo file tại đường dẫn được chỉ định
+**What it does:**
+1. Accepts a Figma URL or node ID from the user
+2. Detects the Figma data source (MCP or REST API)
+3. Extracts design context: layout, fills, typography, screenshot
+4. Analyzes the design and presents an implementation plan for confirmation
+5. Asks which model to use (default: `claude-sonnet-4-6`)
+6. Spawns the `frontend-developer` agent to generate the component
+7. Verifies TypeScript and writes the file to the specified path
 
-**Không dùng khi:** bạn cần cả stories + tests → dùng `/figma-to-feature`.
+**Don't use when:** you need stories and tests too → use `/figma-to-feature` instead.
 
 ---
 
 ### `/figma-to-story`
 
-**Dùng khi:** component đã tồn tại trong codebase nhưng chưa có Storybook story hoặc chưa được wire vào design-contract testing.
+**Use when:** a component already exists in the codebase but has no Storybook story or is not yet wired into design-contract testing.
 
-**Làm gì:**
-1. Scan codebase, build gap report (components thiếu story / story thiếu contract case)
-2. Browse Figma file để match component với node ID tự động
-3. Fetch Figma node properties để chọn đúng `checks`
-4. Thêm `data-testid` vào component (chỉ nơi cần thiết)
-5. Tạo story file với providers đúng, không dùng external URLs
-6. Cập nhật `design-check.config.mjs` (additive only)
-7. Verify TypeScript + story ID trước khi xong
+**What it does:**
+1. Scans the codebase and builds a gap report (components missing stories / stories missing contract cases)
+2. Browses the Figma file to automatically match components to node IDs
+3. Fetches Figma node properties to select the strictest applicable `checks`
+4. Adds `data-testid` to the component (only where needed)
+5. Creates the story file with correct providers and no external URLs
+6. Updates `design-check.config.mjs` (additive only — never touches existing entries)
+7. Verifies TypeScript and the story ID before finishing
 
-**Hỗ trợ hai mode:**
-- **Single**: `component X với node ID Y` — wire ngay một component
-- **Batch audit**: `wire up all` — scan toàn bộ, báo cáo gaps, wire lần lượt từng cái
+**Two modes:**
+- **Single** — `component X with node ID Y`: wires one component immediately
+- **Batch audit** — `wire up all`: scans everything, reports gaps, wires each component in sequence
 
 ---
 
-### Agents (tự động, không gọi trực tiếp)
+### Agents (spawned automatically — do not call directly)
 
-| Agent | Vai trò |
+| Agent | Role |
 |---|---|
-| `frontend-developer` | Nhận Figma data + Tailwind mapping từ orchestrator, viết component file. Được spawn bởi `/figma-to-feature` (step 2e) và `/figma-to-component` (step 4). Model được chọn lúc runtime, default `claude-sonnet-4-6`. |
+| `frontend-developer` | Receives pre-analysed Figma data and Tailwind mapping from the orchestrator, then writes the component file. Spawned by `/figma-to-feature` (step 2e) and `/figma-to-component` (step 4). Model is selected at runtime; default is `claude-sonnet-4-6`. |
