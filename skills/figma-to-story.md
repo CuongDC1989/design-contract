@@ -1,6 +1,63 @@
-# Skill: create-story
+# Skill: figma-to-story
 
 Create React component stories wired to design-contract testing. Supports single-component and full-audit batch modes.
+
+---
+
+## Execution Rules
+
+**Think before editing** — Before touching any file (component, story, config), state what changes and why. One sentence. If unclear, ask.
+
+**Scope = this component only** — Adding a story for `LoginCard` means touching `LoginCard.stories.tsx`, `LoginCard.tsx` (testid only if missing), and `design-check.config.mjs`. Nothing else.
+
+**Surgical testid placement** — Add `data-testid` only where needed for design-check. Do not reorganize the component, rename props, or fix other issues noticed while reading the file.
+
+**No assumptions** — Figma node ID not provided? Ask. Component has no clear root element? Ask. Do not pick a node ID by guessing from the Figma URL structure.
+
+**Config changes are additive** — Only append to `cases[]` and `contractCases[]`. Never reformat, reorder, or touch existing entries.
+
+---
+
+## Pre-flight — Ensure `.claude/settings.json` exists
+
+Before running any steps, check that `.claude/settings.json` is present with the required permissions. Without it, every `npm`, `curl`, and `Read` call will prompt for manual confirmation.
+
+```bash
+cat .claude/settings.json 2>/dev/null || echo "MISSING"
+```
+
+If missing, create it now:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(curl -s * https://api.figma.com/*)",
+      "Bash(curl -s -H * https://api.figma.com/*)",
+      "Bash(curl -s http://127.0.0.1:*)",
+      "Bash(curl -s * http://127.0.0.1:*)",
+      "Bash(node -e *)",
+      "Bash(cat *)",
+      "Bash(find . *)",
+      "Bash(grep *)",
+      "Read(**)"
+    ]
+  }
+}
+```
+
+These rules cover:
+- `npm run *` / `npm *` / `npx *` — running build, test, storybook, and figma:spec scripts
+- `curl * https://api.figma.com/*` — fetching Figma node trees and properties (Steps 0b, 0c)
+- `curl * http://127.0.0.1:*` — reading Storybook's `/index.json` and story iframes (Step 5b)
+- `node -e *` — inline JSON parsing of Figma API responses
+- `cat *` / `find . *` / `grep *` — discovery and config inspection (Step 0)
+- `Read(**)` — reading all project files without prompting
+
+Once the file exists, all of the above run without confirmation prompts for the rest of the session.
 
 ---
 
@@ -10,7 +67,7 @@ Before doing anything else, read the current state:
 
 ```bash
 # 1. Existing contract cases + Figma credentials
-cat design-contract.config.mjs
+cat design-check.config.mjs
 cat .env
 
 # 2. All component files
@@ -233,6 +290,23 @@ Open the component file. Add `data-testid` to the **root element** and any key s
 - Table rows/cells → no testid needed, use CSS path selector in config instead
 - Only add testids to what design-contract needs to locate
 
+**⚠️ Testid must be on the element that OWNS the CSS — not a wrapper.**  
+The `data-testid` must be placed on the SAME element that carries the visual and layout CSS properties Figma will check. Placing it on a wrapper `div.relative` or `div.shrink-0` that has no flex/padding/background will cause every layout check to fail (`gap=normal`, `padding=0`, `alignItems=normal`, etc.).
+
+```tsx
+// ❌ WRONG — testid on outer wrapper, layout properties on inner div
+<div data-testid="nav-menu" className="relative">
+  <div className="flex gap-[24px] items-center">...</div>  {/* ← gap/alignItems are HERE */}
+</div>
+
+// ✅ CORRECT — testid on the element that actually has the layout
+<div className="relative">
+  <div data-testid="nav-menu" className="flex gap-[24px] items-center">...</div>
+</div>
+```
+
+When flattening is possible (outer wrapper exists only for relative positioning), collapse both divs into one and put testid + visual CSS on the single element.
+
 **Check first:** If the component already has the correct `data-testid`, skip this step.
 
 ---
@@ -250,6 +324,34 @@ Open the component file. Add `data-testid` to the **root element** and any key s
 - Title `UI/DataTable` → story ID `ui-datatable--default`
 
 ### ⚠️ Critical rules — these cause "story failed to load" if violated
+
+**Rule 0: Never use inline `<style>` tags inside React components (React 19).**  
+React 19 hoists `<style>` tags from component bodies to `<document.head>`. This breaks Storybook story loading because the hoisting mechanism behaves differently inside Storybook's iframe context, causing the story to hang or throw.
+
+```tsx
+// ❌ WRONG — causes "story failed to load" in React 19 + Storybook
+function MyComponent() {
+  return (
+    <div>
+      <style>{`@keyframes slideIn { from { opacity: 0 } to { opacity: 1 } }`}</style>
+      ...
+    </div>
+  )
+}
+
+// ✅ CORRECT — define keyframes in globals.css and use a CSS class
+// In globals.css:
+// @keyframes slideIn { from { opacity: 0; } to { opacity: 1; } }
+// .animate-slide-in { animation: slideIn 0.25s ease-out; }
+
+function MyComponent() {
+  return (
+    <div>
+      <div className="animate-slide-in">...</div>
+    </div>
+  )
+}
+```
 
 **Rule 1: Always declare `component` in meta.**  
 Using `render` without `component` in meta causes Storybook v10 to fail loading the story.
@@ -511,9 +613,9 @@ No config change needed — this is automatic when `'shadow'` is in `checks`.
 
 ---
 
-## Step 4 — Update `design-contract.config.mjs` AND `design-spec.json`
+## Step 4 — Update `design-check.config.mjs` AND `design-spec.json`
 
-**⚠️ CRITICAL: Always update BOTH files.** The test runner reads from `design-spec.json` at runtime, NOT from `design-contract.config.mjs`. The config is the human-readable source; the spec is the cached snapshot used by tests. They must stay in sync.
+**⚠️ CRITICAL: Always update BOTH files.** The test runner reads from `design-spec.json` at runtime, NOT from `design-check.config.mjs`. The config is the human-readable source; the spec is the cached snapshot used by tests. They must stay in sync.
 
 **Check first:** Read the current config. If this component's `name` already exists in `cases[]` or `contractCases[]`, update the existing entry rather than adding a duplicate.
 
@@ -565,18 +667,23 @@ Fix any errors before continuing. A TypeScript error in a story file prevents th
 
 The story ID Storybook generates from a `title` must exactly match the `storyId` in config.
 
-Formula: lowercase the title, replace `/` with `-`, replace spaces with `-`, keep letters and digits only, then append `--` + lowercase export name.
+Formula: lowercase the title, replace `/` with `-`, replace spaces with `-`, keep letters and digits only, then append `--` + lowercased export name (with hyphens inserted before digit sequences).
 
 ```
 title: 'Users/UserDetailDrawer'  →  prefix: users-userdetaildrawer
 export const Default             →  variant: default
 storyId: 'users-userdetaildrawer--default'   ✓
+
+title: 'Onboarding/OnboardingFlow'  →  prefix: onboarding-onboardingflow
+export const Step1                  →  variant: step-1   (NOT step1 — v10 inserts hyphen before digits)
+storyId: 'onboarding-onboardingflow--step-1'   ✓
 ```
 
 Common mistakes:
 - Camel case in title not fully lowercased → `UserDetail` becomes `userdetail` not `user-detail`
 - Extra spaces in title creating double hyphens
 - Export name with uppercase → always lowercase it in the storyId
+- **Export name with digits** → Storybook v10 inserts a hyphen before digit sequences: `Step1` → `step-1`, `Tab2` → `tab-2`. Always verify with the curl command below.
 
 Verify with:
 ```bash
@@ -627,6 +734,199 @@ When a test fails, the default action is to **fix the component to match Figma**
 
 ---
 
+### `drop-shadow` vs `box-shadow` — shadow check will always fail with `drop-shadow-*`
+
+Tailwind's `drop-shadow-[...]` generates `filter: drop-shadow(...)` — a CSS filter, **not** `box-shadow`. The design-contract `shadow` check exclusively reads the `box-shadow` CSS property. If you use `drop-shadow`, the check reports `boxShadow: none` even when a visible shadow exists.
+
+```tsx
+// ❌ WRONG — generates filter:drop-shadow(...), shadow check sees "none"
+className="drop-shadow-[0px_12px_12px_rgba(145,158,171,0.12)]"
+
+// ✅ CORRECT — generates box-shadow, shadow check works
+className="shadow-[0px_12px_12px_rgba(145,158,171,0.12)]"
+```
+
+**Rule:** When Figma has `effects: [DROP_SHADOW]` on a node, always use Tailwind `shadow-*` utilities (not `drop-shadow-*`) on the corresponding React element.
+
+---
+
+### `aria-hidden` border overlay — border check always fails
+
+Some components simulate borders with an absolutely-positioned `aria-hidden` child div to avoid CSS border affecting layout box size. This means the testid element itself has no `border-color` → design-contract reads `rgb(0,0,0)` (default).
+
+```tsx
+// ❌ Border is on a child, not the testid element → borderColor check fails
+<div data-testid="my-component" className="relative">
+  <div aria-hidden="true" className="absolute border border-border inset-0 pointer-events-none" />
+  ...
+</div>
+
+// ✅ Border directly on testid element → borderColor check passes
+<div data-testid="my-component" className="border border-border relative">
+  ...
+</div>
+```
+
+If the overlay pattern is intentional and cannot be changed, remove `'border'` from `checks` for that contract case.
+
+---
+
+### Typography check picks wrong text node — use `typographySelector`
+
+The `typography` check auto-selects the **first text descendant** of the selector element. For components with a visible text node (e.g., a "Send" button) that appears before the primary text target (e.g., an `<input>` placeholder), the check reads the wrong element's font styles.
+
+```js
+// ❌ Typography check finds "Send" button text (font-bold, white, center-aligned)
+{ name: 'chat-chatinput--default', checks: CHECKS_STRICT, selector: '[data-testid="chat-input"]' }
+
+// ✅ Explicitly target the input for font metrics; exclude 'text' since placeholder ≠ innerText
+{ name: 'chat-chatinput--default',
+  checks: ['exists','size','background','border','shadow','radius','layout','typography'],
+  selector: '[data-testid="chat-input"]',
+  typographySelector: 'input' }
+```
+
+**Note:** `<input>` placeholder text lives in the `::placeholder` pseudo-element — it is NOT part of `innerText`. Never include `'text'` in `checks` for an input whose "text" in Figma is placeholder copy.
+
+---
+
+### Story decorator padding shrinks rendered width
+
+A decorator with `padding: '16px'` reduces the available width for the component. If the Figma frame expects 448px but the decorator is `{ width: '448px', padding: '16px' }`, the component renders at 416px (448 - 32).
+
+```tsx
+// ❌ Decorator padding shrinks content to 416px — size check fails vs 448px Figma frame
+decorators: [(Story) => <div style={{ width: '448px', padding: '16px' }}><Story /></div>]
+
+// ✅ No padding on the decorator — component fills all 448px
+decorators: [(Story) => <div style={{ width: '448px' }}><Story /></div>]
+```
+
+Storybook's own `layout: 'padded'` already adds canvas-level padding. Decorator containers should match the Figma frame width exactly with no additional padding.
+
+---
+
+### `flex-1 min-h-0` components collapse in Storybook without a flex parent
+
+`flex-1` only grows when the element is inside a flex container. In Storybook's `fullscreen` layout the `#storybook-root` is a block element by default — `flex-1` has no effect and the component renders at content height (e.g., 102px instead of 900px).
+
+For components that are designed to fill the full viewport (loading screens, full-page layouts), use `min-h-screen` instead of `flex-1 min-h-0` OR add a decorator that provides an explicit height with `display: flex`:
+
+```tsx
+// ✅ Option A: component uses min-h-screen
+<div data-testid="loading-screen" className="min-h-screen overflow-hidden rounded-[16px] ...">
+
+// ✅ Option B: story decorator provides flex context
+decorators: [(Story) => <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}><Story /></div>]
+```
+
+---
+
+### `size` check fails for content-width or content-height components
+
+Some components have width determined by their text content (nav menus, pagination controls) or height determined by mock data quantity. Their rendered size will never reliably match a static Figma frame.
+
+Use `['exists', 'layout']` instead of `CHECKS_LAYOUT` (which includes `'size'`) for:
+- Components whose width is text-content-driven (nav items, tag lists, pagination dots)
+- Page-level stories where story renders full scrollable height but Figma shows a viewport-clipped frame height
+- Any component where Figma dimension ≠ actual render and the difference is structural (not a CSS bug)
+
+```js
+// ❌ size check fails because Figma frame width = full row (912px), component is content-width
+{ name: 'home-pagination--default', checks: CHECKS_LAYOUT, selector: '[data-testid="pagination"]' }
+
+// ✅ skip size, still catch layout (gap, flex-direction, alignItems)
+{ name: 'home-pagination--default', checks: ['exists', 'layout'], selector: '[data-testid="pagination"]' }
+```
+
+---
+
+### Storybook v10 story IDs for numbered export names contain hyphens
+
+In Storybook v10, the ID generator inserts a hyphen before digit sequences when it lowercases PascalCase export names. `Step1` → `step-1`, `Step2` → `step-2`. Older Storybook produced `step1`.
+
+This means `storyId: 'onboarding-onboardingflow--step1'` will silently fail to load — the real ID is `step-1`.
+
+**Always verify actual story IDs before writing config:**
+```bash
+curl -s http://127.0.0.1:6006/index.json | node -e "
+  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  Object.values(d.entries || {}).forEach(s => console.log(s.id));
+" | grep 'yourcomponent'
+```
+
+This is already covered by Step 5b's "Verify story ID is correct" step — but this specific hyphen-before-digit behavior is easy to miss because the formula appears to work (`step1` looks valid) yet the ID doesn't exist.
+
+---
+
+### `overflow-clip` ≠ `overflow-hidden` — Figma `clipsContent` maps to `hidden`
+
+Tailwind `overflow-clip` generates `overflow: clip` (CSS Overflow Level 3). Figma's `clipsContent: true` is represented by design-contract as `overflow: hidden`. These are different CSS values — `overflow: clip` fails the `overflow` check even though both visually clip the content.
+
+```tsx
+// ❌ WRONG — generates overflow:clip, overflow check fails against Figma clipsContent=true
+className="overflow-clip ..."
+
+// ✅ CORRECT — generates overflow:hidden, matches Figma clipsContent=true
+className="overflow-hidden ..."
+```
+
+**Rule:** Whenever `hasOverflow: true` from Step 0c (Figma `clipsContent === true`), use `overflow-hidden`.
+
+---
+
+### Tailwind v4 `shadow-[...]` may not be readable by `getComputedStyle` — use inline style
+
+In Tailwind v4, arbitrary shadow utilities (`shadow-[...]`) are implemented via CSS custom properties (`--tw-shadow`). When `getComputedStyle(el).boxShadow` is called (as the `shadow` check does), browsers sometimes return the variable chain (`0 0 #0000, 0 0 #0000, 0 0 #0000`) rather than the resolved shadow values, causing the check to see `offsetY=0, blur=0` even though a shadow is visually rendered.
+
+```tsx
+// ❌ May fail shadow check — Tailwind v4 uses --tw-shadow variable
+className="shadow-[0px_12px_24px_rgba(145,158,171,0.12)]"
+
+// ✅ Inline style bypasses variable abstraction — shadow check reads actual value
+style={{ boxShadow: '0px 12px 24px rgba(145, 158, 171, 0.12)' }}
+```
+
+**Rule:** When a component must pass the `shadow` check AND uses Tailwind v4, apply box-shadow as an inline `style` prop rather than a Tailwind arbitrary class.
+
+---
+
+### Two-level Figma frame: outer container + inner layout frame
+
+Figma components often have a two-level structure:
+- **Outer frame**: visual container — has `background`, `cornerRadius`, `clipsContent` — but **no auto-layout** (gap=0, padding=0)
+- **Inner frame**: layout shell — has `layoutMode`, `gap`, `paddingTop/Bottom/Left/Right`
+
+A single testid can only target one level. The bidirectional layout check makes both choices fail if the wrong level is picked:
+
+| Testid placement | Layout check result |
+|---|---|
+| Outer element (no CSS gap/padding), but Figma inner node selected | browser=0, Figma=32 → **FAIL** (was missing) |
+| Merged/inner element (gap=32, padding=32/24), but Figma outer frame selected | browser=32, Figma=0 → **FAIL** (extra in browser) |
+
+**Correct strategy:**
+1. Put testid on the **outer** element — match Figma outer frame node ID
+2. Use custom checks limited to what the outer frame **actually has**: `['exists', 'background', 'radius', 'overflow']`
+3. Do NOT include `'layout'` or `'size'` — the outer frame has no auto-layout and its height is viewport-dependent
+4. If layout verification matters, add a second testid on the inner element mapped to the Figma inner frame node ID as a separate contract case
+
+```tsx
+// Outer element: testid + visual container props only (no gap/padding)
+<div data-testid="onboarding-flow" className="bg-background flex flex-col overflow-hidden rounded-[16px] size-full">
+  {/* Inner element: owns the layout — no testid needed unless testing separately */}
+  <div className="flex flex-col items-center justify-between gap-[32px] py-[32px] px-[24px] size-full">
+    ...
+  </div>
+</div>
+```
+
+```js
+// Config: outer frame checks only
+{ name: 'onboarding-flow--step1', checks: ['exists', 'background', 'radius', 'overflow'], selector: '[data-testid="onboarding-flow"]' }
+```
+
+---
+
 ### Figma wrapper frame pitfall
 
 When `figmaNodeId` points to a wrapper frame (e.g., `"Frame 7002"`) that has `backgroundColorRgba: null`, `cornerRadius: null`, `layout: null` — but your React selector points to the rendered component root (a `<span>` with background and border-radius) — the checks must be based on the **Figma node's actual properties**, not what the React element looks like.
@@ -665,7 +965,8 @@ Fix: add `whitespace-nowrap` and an explicit `leading-[Xpx]` on the badge span s
 
 | Component | storyId | figmaScale | checks | selector |
 |---|---|---|---|---|
-| Page root frame | `users-userspage--default` | 1 | `['exists','size','background','overflow']` | `[data-testid="page-root"]` |
+| Page root frame (has fills+radius+overflow, no layout) | `users-userspage--default` | 1 | `['exists','background','radius','overflow']` | `[data-testid="page-root"]` |
+| Full-screen outer container (two-level: outer=visual, inner=layout) | `feature-component--step-1` | 1 | `['exists','background','radius','overflow']` | `[data-testid="outer-container"]` |
 | Page section (with bg + layout) | `users-userspage--default` | 1 | `CHECKS_CONTAINER` | `[data-testid="section-header"]` |
 | Page section (with typography) | `users-userspage--default` | 1 | `CHECKS_STRICT` | `[data-testid="section-hero"]` + `typographySelector: 'h1'` |
 | Card header (in page) | `users-userspage--default` | 1 | `CHECKS_CONTAINER` | `[data-testid="table-card-header"]` |

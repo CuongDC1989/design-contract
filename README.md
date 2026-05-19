@@ -1,4 +1,4 @@
-# @cuongdc1989/design-contract
+# @solashi2026/design_check
 
 Design contract testing engine: compare CSS computed styles in Storybook against Figma design specs.
 
@@ -9,18 +9,18 @@ Fetches node properties from Figma, renders your stories in a headless browser, 
 ## Install
 
 ```bash
-npm install @cuongdc1989/design-contract
-npx design-contract init
+npm install @solashi2026/design_check
+npx design-check init
 ```
 
-`init` creates `design-contract.config.mjs` and adds npm scripts to `package.json`. If Claude Code is installed, it also installs a `/create-story` skill that automates wiring up new components.
+`init` creates `design-check.config.mjs` and adds npm scripts to `package.json`. If Claude Code is installed, it also installs a `/figma-to-story` skill that automates wiring up new components.
 
 ---
 
 ## Quick start
 
 1. Add `FIGMA_TOKEN` and `FIGMA_FILE_KEY` to `.env`
-2. Fill in `design-contract.config.mjs`
+2. Fill in `design-check.config.mjs`
 3. Start Storybook: `npm run storybook`
 4. Run the full pipeline: `npm run test:design:full`
 
@@ -30,25 +30,25 @@ npx design-contract init
 
 | Command | Description |
 |---|---|
-| `design-contract init` | Create config template + add scripts to package.json |
-| `design-contract fetch-spec` | Fetch Figma nodes → write design-spec.json |
-| `design-contract test` | Run Playwright tests against Storybook |
-| `design-contract run` | fetch-spec + test (full pipeline) |
+| `design-check init` | Create config template + add scripts to package.json |
+| `design-check fetch-spec` | Fetch Figma nodes → write design-spec.json |
+| `design-check test` | Run Playwright tests against Storybook |
+| `design-check run` | fetch-spec + test (full pipeline) |
 
 ---
 
 ## Config reference
 
 ```js
-// design-contract.config.mjs
-import { CHECKS_STRICT, CHECKS_LAYOUT } from '@cuongdc1989/design-contract'
+// design-check.config.mjs
+import { CHECKS_STRICT, CHECKS_LAYOUT } from '@solashi2026/design_check'
 
 export default {
   figmaFileKey:   process.env.FIGMA_FILE_KEY,
   figmaToken:     process.env.FIGMA_TOKEN,
   storybookUrl:   process.env.STORYBOOK_URL ?? 'http://127.0.0.1:6006',
   specOutputPath: './design-spec.json',
-  reportOutputPath: './design-contract-report.html',
+  reportOutputPath: './design-check-report.html',
 
   cases: [
     {
@@ -78,7 +78,7 @@ export default {
 | `figmaToken` | `string` | Figma personal access token with read scope |
 | `storybookUrl` | `string` | Base URL of the running Storybook instance. Default: `http://127.0.0.1:6006` |
 | `specOutputPath` | `string` | Where to write the fetched Figma spec JSON. Default: `./design-spec.json` |
-| `reportOutputPath` | `string` | Where to write the HTML report. Default: `./design-contract-report.html` |
+| `reportOutputPath` | `string` | Where to write the HTML report. Default: `./design-check-report.html` |
 
 ---
 
@@ -408,13 +408,65 @@ contractCases: [
 
 ## AI assistant (Claude Code)
 
-Running `npx design-contract init` installs a `/create-story` skill into `.claude/commands/`.
+Running `npx design-check init` installs skills and agents into `.claude/skills/` and `.claude/agents/`.
 
-In Claude Code, type `/create-story` — the AI will:
-- Scan the codebase for components without stories
-- Browse the Figma file via API to match components to node IDs
-- Add `data-testid` to the component
-- Create the story file with correct providers and no external URLs
-- Fetch the node's Figma properties to determine the strictest applicable `checks`
-- Update `design-contract.config.mjs`
-- Run TypeScript and verify the story ID before finishing
+---
+
+### `/figma-to-feature`
+
+**Dùng khi:** bạn có một Figma page và muốn triển khai toàn bộ thành code production — từ components, Storybook stories, đến design-contract tests — và iterate cho đến khi tất cả tests pass.
+
+**Làm gì:**
+1. Đọc project state, fetch Figma page tree, build component map có confidence scoring
+2. Detect design system (Radix, shadcn, MUI…) và reuse existing components
+3. Fetch node props + screenshot, map Tailwind classes, trình plan cho user confirm
+4. Spawn `frontend-developer` agent để viết từng component
+5. Review production readiness (async states, i18n, forms, animation…)
+6. Tạo Storybook stories + cập nhật `design-check.config.mjs`
+7. Chạy tests, diagnose failures, repair cho đến khi pass
+
+**Không dùng khi:** bạn chỉ cần viết nhanh một component đơn lẻ không cần test → dùng `/figma-to-component`.
+
+---
+
+### `/figma-to-component`
+
+**Dùng khi:** bạn có một Figma URL hoặc node ID cụ thể và chỉ cần code của component đó — nhanh, không cần stories hay test config.
+
+**Làm gì:**
+1. Nhận Figma URL / node ID từ user
+2. Detect Figma data source (MCP hoặc REST API)
+3. Extract design context: layout, fills, typography, screenshot
+4. Phân tích và tạo implementation plan, trình user confirm
+5. Hỏi model muốn dùng (default: `claude-sonnet-4-6`)
+6. Spawn `frontend-developer` agent để generate component
+7. Verify TypeScript, tạo file tại đường dẫn được chỉ định
+
+**Không dùng khi:** bạn cần cả stories + tests → dùng `/figma-to-feature`.
+
+---
+
+### `/figma-to-story`
+
+**Dùng khi:** component đã tồn tại trong codebase nhưng chưa có Storybook story hoặc chưa được wire vào design-contract testing.
+
+**Làm gì:**
+1. Scan codebase, build gap report (components thiếu story / story thiếu contract case)
+2. Browse Figma file để match component với node ID tự động
+3. Fetch Figma node properties để chọn đúng `checks`
+4. Thêm `data-testid` vào component (chỉ nơi cần thiết)
+5. Tạo story file với providers đúng, không dùng external URLs
+6. Cập nhật `design-check.config.mjs` (additive only)
+7. Verify TypeScript + story ID trước khi xong
+
+**Hỗ trợ hai mode:**
+- **Single**: `component X với node ID Y` — wire ngay một component
+- **Batch audit**: `wire up all` — scan toàn bộ, báo cáo gaps, wire lần lượt từng cái
+
+---
+
+### Agents (tự động, không gọi trực tiếp)
+
+| Agent | Vai trò |
+|---|---|
+| `frontend-developer` | Nhận Figma data + Tailwind mapping từ orchestrator, viết component file. Được spawn bởi `/figma-to-feature` (step 2e) và `/figma-to-component` (step 4). Model được chọn lúc runtime, default `claude-sonnet-4-6`. |

@@ -1,17 +1,18 @@
 {
-  "name": "@cuongdc1989/design-contract",
-  "version": "1.4.0",
+  "name": "@solashi2026/design_check",
+  "version": "1.5.0",
   "description": "Design contract testing engine: compare Storybook CSS against Figma specs",
   "type": "module",
   "main": "index.mjs",
   "bin": {
-    "design-contract": "./bin/cli.mjs"
+    "design-check": "./bin/cli.mjs"
   },
   "files": [
     "index.mjs",
     "bin/",
     "src/",
-    "skills/"
+    "skills/",
+    "agents/"
   ],
   "dependencies": {
     "dotenv": "^16.0.0",
@@ -20,6 +21,11 @@
   "engines": {
     "node": ">=18"
   },
-  "keywords": ["design-contract", "figma", "storybook", "visual-testing"],
+  "keywords": [
+    "design-contract",
+    "figma",
+    "storybook",
+    "visual-testing"
+  ],
   "license": "MIT"
 }

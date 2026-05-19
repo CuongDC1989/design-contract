@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 export async function generateReport(results, config, meta = {}) {
-  const outputPath = path.resolve(process.cwd(), config.reportOutputPath ?? './design-contract-report.html');
+  const outputPath = path.resolve(process.cwd(), config.reportOutputPath ?? './design-check-report.html');
   await fs.writeFile(outputPath, buildHtml(results, config, meta), 'utf8');
   return outputPath;
 }

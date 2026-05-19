@@ -1,6 +1,20 @@
-# Sub-skill: figma-to-component / phase4-repair
+# Sub-skill: figma-to-feature / phase4-repair
 
 Covers Phase 4 (iteration loop) and Phase 5 (repair mode), plus Quick Reference, telemetry, and design-token sync.
+
+---
+
+## Execution Rules — repair is the highest-risk phase for scope creep
+
+**Diagnose before fixing** — Read the exact failure message and screenshot before touching any file. State in one sentence what is wrong and why.
+
+**One failure, one fix** — Fix the failing check only. Do not refactor surrounding code, rename variables, or clean up while you're in the file.
+
+**Surgical changes** — If `padding` is wrong, change only the padding class. If `border-radius` is wrong, change only the radius class. Do not restructure the JSX to fix a CSS value.
+
+**Fix code, not checks** — Never remove a check because it's hard to match. The only valid reason to remove a check is a confirmed null/0 Figma property (see 4d). Everything else means the component is wrong.
+
+**No lateral fixes** — If you notice other failing tests or unrelated issues while repairing, note them and finish the current repair first. Do not context-switch mid-fix.
 
 ---
 
@@ -238,8 +252,8 @@ After each completed repair cycle:
 ```bash
 node -e "
   const fs = require('fs');
-  const log = fs.existsSync('.design-contract-log.json')
-    ? JSON.parse(fs.readFileSync('.design-contract-log.json','utf8'))
+  const log = fs.existsSync('.design-check-log.json')
+    ? JSON.parse(fs.readFileSync('.design-check-log.json','utf8'))
     : [];
   log.push({
     timestamp: new Date().toISOString(),
@@ -249,7 +263,7 @@ node -e "
     fix: 'changed h-[80px] to h-20',
     result: 'pass'
   });
-  fs.writeFileSync('.design-contract-log.json', JSON.stringify(log, null, 2));
+  fs.writeFileSync('.design-check-log.json', JSON.stringify(log, null, 2));
 "
 ```
 

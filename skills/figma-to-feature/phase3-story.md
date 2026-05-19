@@ -1,8 +1,8 @@
-# Sub-skill: figma-to-component / phase3-story
+# Sub-skill: figma-to-feature / phase3-story
 
-Covers Phase 3: creating Storybook stories and updating design-contract.config.mjs.
+Covers Phase 3: creating Storybook stories and updating design-check.config.mjs.
 
-**After completing Phase 3:** load sub-skill `figma-to-component/phase4-repair` to start the iteration loop.
+**After completing Phase 3:** load sub-skill `figma-to-feature/phase4-repair` to start the iteration loop.
 
 ---
 
@@ -50,10 +50,10 @@ Map properties → checks:
 | `hasTypography` | `'typography'` |
 | `hasOverflow` | `'overflow'` |
 
-Named check sets (import from `@cuongdc1989/design-contract`):
+Named check sets (import from `@solashi2026/design_check`):
 
 ```js
-import { CHECKS_STRICT, CHECKS_CONTAINER, CHECKS_LAYOUT, CHECKS_SHAPE, CHECKS_ROW } from '@cuongdc1989/design-contract'
+import { CHECKS_STRICT, CHECKS_CONTAINER, CHECKS_LAYOUT, CHECKS_SHAPE, CHECKS_ROW } from '@solashi2026/design_check'
 // CHECKS_STRICT    = ['exists','size','radius','background','border','shadow','opacity','layout','typography','text','overflow','blend']
 // CHECKS_CONTAINER = ['exists','size','radius','background','shadow','layout','overflow']
 // CHECKS_SHAPE     = ['exists','size','radius','background']
@@ -122,7 +122,7 @@ parameters: {
 }
 ```
 
-### 3d — Update design-contract.config.mjs
+### 3d — Update design-check.config.mjs
 
 Read the current config. If an entry already exists for this component, update it — do not duplicate.
 
@@ -251,4 +251,4 @@ Checks with null expected values are **silently skipped** — so `CHECKS_STRICT`
 
 ## Next step
 
-After Phase 3: load sub-skill `figma-to-component/phase4-repair` to begin the iteration loop.
+After Phase 3: load sub-skill `figma-to-feature/phase4-repair` to begin the iteration loop.

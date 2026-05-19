@@ -1,8 +1,8 @@
-# Sub-skill: figma-to-component / phase2-production
+# Sub-skill: figma-to-feature / phase2-production
 
 Production readiness rules (Phase 2h). Apply these to every component after the visual implementation is done. A component that passes design-contract tests but fails in production is not done.
 
-**After completing 2h:** load sub-skill `figma-to-component/phase3-story`.
+**After completing 2h:** load sub-skill `figma-to-feature/phase3-story`.
 
 ---
 
@@ -226,4 +226,4 @@ interface TableProps {
 
 ## Next step
 
-After all production rules applied: load sub-skill `figma-to-component/phase3-story`.
+After all production rules applied: load sub-skill `figma-to-feature/phase3-story`.

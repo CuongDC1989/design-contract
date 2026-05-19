@@ -1,17 +1,22 @@
-# Sub-skill: figma-to-component / phase2-fetch
+# Sub-skill: figma-to-feature / phase2-fetch
 
 Covers Phase 2 sections 2a–2g: fetching Figma node properties, mapping values to Tailwind classes, writing components, TypeScript verification, and anti-hallucination checks.
 
-**After completing 2a–2g:** load sub-skill `figma-to-component/phase2-production` for production readiness rules before proceeding to Phase 3.
+**After completing 2a–2g:** load sub-skill `figma-to-feature/phase2-production` for production readiness rules before proceeding to Phase 3.
 
 ---
 
 ## Phase 2 — Component Implementation (2a–2g)
 
+> **Figma source mode** was detected in Phase 1 (step 1b). Use the same mode (`[MCP]` or `[API]`) for every fetch in this phase — do not mix.
+
 For each component in the confirmed map (skip any marked `skip`):
 
 ### 2a — Fetch detailed Figma node properties
 
+**[MCP]** Call `figma___get_design_context` with the node ID. Extract from the response: `absoluteBoundingBox`, `layoutMode`, `padding*`, `itemSpacing`, `counterAxisAlignItems`, `primaryAxisAlignItems`, `cornerRadius`, `fills`, `effects`, `strokes`, `clipsContent`, `opacity`, `primaryAxisSizingMode`, `counterAxisSizingMode`, `minWidth/maxWidth/minHeight/maxHeight`, `layoutPositioning`, `relativeTransform`, `layoutWrap`. Build the same `out` object as the API path below.
+
+**[API]**
 ```bash
 # Replace NODE_ID with the component's figmaNodeId
 source .env
@@ -68,8 +73,11 @@ curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
 
 ### 2a-typography — Fetch TEXT node properties
 
-For components that contain text, fetch typography from the first TEXT child:
+For components that contain text, fetch typography from the first TEXT child.
 
+**[MCP]** The `figma___get_design_context` response from 2a already contains the full node tree — traverse children to find the first node with `type === 'TEXT'` and read its `style` object: `fontSize`, `fontWeight`, `lineHeightPx`, `lineHeightUnit`, `letterSpacing`, `textAlignHorizontal`.
+
+**[API]**
 ```bash
 source .env
 curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
@@ -144,6 +152,9 @@ node -e "
 
 When `hasVariables: true` in 2a output:
 
+**[MCP]** Call `figma___get_design_context` at file scope (no nodeId) — it typically includes variable/token definitions. Extract COLOR variables: name → hex value → map to Tailwind token class using the table below.
+
+**[API]**
 ```bash
 source .env
 curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
@@ -195,6 +206,29 @@ cat package.json | grep -E '"lucide|heroicon|phosphor|feather|tabler' | head -5
 | `FIT` | `object-contain` |
 | `CROP` | `object-cover` |
 | `TILE` | `bg-repeat` (use background-image) |
+
+### 2a-screenshot — Capture visual reference
+
+Fetch a PNG of the Figma node to pass as visual context to the `frontend-developer` agent in step 2e.
+
+**[MCP]** Call `figma___get_screenshot` with the node ID — it returns the image directly. Read it with the Read tool.
+
+**[API]**
+```bash
+source .env
+curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
+  "https://api.figma.com/v1/images/$FIGMA_FILE_KEY?ids=NODE_ID&format=png&scale=2" \
+  | node -e "
+    const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+    if(d.err){console.error(d.err);process.exit(1);}
+    const url=Object.values(d.images||{})[0];
+    console.log(url);
+  "
+# Download: curl -sL '<EXPORT_URL>' -o /tmp/figma-NODE_ID.png
+```
+Read the downloaded PNG with the Read tool.
+
+---
 
 ### 2b — Wrapper frame pitfall
 
@@ -347,66 +381,120 @@ If the component already exists:
 3. Only change values that differ — preserve existing logic, structure, naming
 4. Do NOT rewrite the whole component if only a few CSS values differ
 
-### 2e — Write or update the component
+### 2d-plan — Draft implementation plan and confirm
 
-**Component conventions:**
-- Functional components with named exports
-- Tailwind CSS only (no inline styles except for dynamic values)
-- `data-testid` on root element: `<feature>-<componentname>`
-- Sub-elements mapping to separate Figma nodes get their own `data-testid`
-- Props typed with `interface`
+Using all data from 2a–2c, draft a structured plan and present to the user for confirmation **before** spawning the code generation agent.
 
-**Complexity threshold:** If a component would exceed ~150 lines of JSX, split it. Natural split points:
-- Repeated sub-elements → extract as named sub-component
-- Elements with their own Figma node ID → already designed as separate components
-- Sections that could render independently → extract
+```
+## Implementation Plan: [ComponentName]
 
-**Semantic HTML — choose the right element:**
+File:    [file_path]
+testid:  [feature]-[componentname]
+Node:    [NODE_ID]
 
-| Use case | Element |
-|---|---|
-| Clickable action | `<button type="button">` |
-| Navigation link | `<a href>` or `<Link to>` |
-| Navigation container | `<nav aria-label="...">` |
-| Main page content | `<main>` |
-| Grouped section | `<section aria-labelledby="...">` |
-| Heading | `<h1>`–`<h6>` |
-| Form | `<form onSubmit={...}>` |
-| List of items | `<ul><li>` or `<ol><li>` |
-| Data table | `<table><thead><tbody><th scope="col">` |
+### CSS
+- Layout:     [e.g. flex flex-col gap-4 px-6 py-8]
+- Background: [e.g. bg-white / bg-[#F5F5F5]]
+- Typography: [e.g. text-sm font-medium leading-5]
+- Shape:      [e.g. rounded-lg border border-grey-200]
+- Shadow:     [e.g. shadow-card / none]
 
-**Accessibility — required for interactive & informational elements:**
+### Props interface (inferred from Figma structure)
+interface [ComponentName]Props {
+  // list props with types
+}
 
-| Element type | Required |
-|---|---|
-| `<button>` or `<a>` with no text | `aria-label` |
-| Icon-only button | `aria-label` + `aria-hidden="true"` on icon |
-| `<img>` (informative) | `alt="description"` |
-| `<img>` (decorative) | `alt=""` |
-| `<input>` | `<label htmlFor>` or `aria-label` |
-| Modal / Drawer | `role="dialog"` + `aria-labelledby` |
-| Loading spinner | `role="status"` + `aria-label="Loading"` |
+### Async states
+[ ] loading  [ ] error  [ ] empty  — mark if Figma has named variants
 
-**Interaction extraction:**
+### Components to reuse
+[from Phase 1e — UI library + existing project components]
 
-| Figma interaction | Tailwind |
-|---|---|
-| Mouse enter (hover) | `hover:` |
-| Focus | `focus:` `focus-visible:` |
-| Press / mouse down | `active:` |
-| Any visual state change | `transition-colors duration-200` |
-
-**Variant handling (COMPONENT_SET):**
-
-```tsx
-export const Active: Story = { args: { status: 'active' } }
-export const Disabled: Story = { args: { status: 'disabled' } }
+### Notes
+[wrapper frame, z-index issues, absolute children, i18n, etc.]
 ```
 
-**Traceability comment** at top of every newly generated file:
-```tsx
-// Figma: "<NodeName>" · file: FIGMA_FILE_KEY · node: NODE_ID
+Wait for user confirmation: **"Proceed with code generation?"** Do not spawn the agent until confirmed.
+
+---
+
+### 2e — Spawn frontend-developer agent
+
+After user confirms the plan, ask which model to use:
+
 ```
+Which model should the frontend-developer agent use?
+  1. claude-sonnet-4-6 (default)
+  2. claude-opus-4-7
+  3. claude-haiku-4-5-20251001
+  [Enter number or press Enter for default]
+```
+
+Use the selected model (or `claude-sonnet-4-6` if no input). Then spawn the `frontend-developer` agent using the Agent tool with the following prompt:
+
+---
+
+**Agent:** `frontend-developer`
+
+**Prompt:**
+
+```
+Generate a production-ready React/TypeScript component.
+
+## Target
+File: [file_path]
+Component: [ComponentName]
+data-testid: [testid]
+Traceability: // Figma: "[NodeName]" · file: [FIGMA_FILE_KEY] · node: [NODE_ID]
+
+## Figma data
+[Paste full 2a output — layout, padding, gap, fills, strokes, effects, cornerRadius, opacity]
+[Paste 2a-typography output — fontSize, fontWeight, lineHeight, letterSpacing, textAlign]
+[Paste 2a-colors / 2a-variables output — resolved color tokens]
+
+## Tailwind class mapping (from 2c)
+[Paste the complete class list derived in 2c]
+
+## Props interface
+[Paste the confirmed interface from 2d-plan]
+
+## Async states
+[list needed states: loading / error / empty / success — only if confirmed in 2d-plan]
+
+## Design system
+- UI library: [from Phase 1e — e.g. @radix-ui, shadcn, none]
+- Reuse: [existing shared components from Phase 1e]
+
+## Existing code (if updating)
+[Paste current file content from 2d — change only CSS values that differ, preserve logic/structure/naming]
+
+## Visual reference
+[Attach /tmp/figma-NODE_ID.png from 2a-screenshot]
+
+## Execution rules
+- **Think first** — before writing any line, state in one sentence what changes and why it matches the goal
+- **Surgical** — write only `[file_path]`. Do not create stories, config, hooks, or helper files unless explicitly listed above
+- **No assumptions** — if any Figma value above is missing or ambiguous, state the gap; do not invent a value
+- **Simplicity first** — no abstractions unless 3+ concrete duplications force it right now
+- **No over-engineering** — no future-proofing, no "while I'm here" refactors
+
+## Code rules
+- Named export, interface [ComponentName]Props at top of file
+- Tailwind only — no inline styles except dynamic values (e.g. calculated widths)
+- Never hardcode visible text — every text node is a prop, use Figma text as default value
+- Check i18n: if project uses useTranslation, use t() keys instead of string defaults
+- Semantic HTML: button for actions, nav/main/section for layout, ul/li for lists, table for tabular data
+- ARIA: aria-label on icon-only buttons, alt on images, role="dialog" on modals
+- key in lists: use stable identifier, never key={index}
+- Split if JSX exceeds ~150 lines — extract at natural boundaries (repeated sub-elements, separate Figma node IDs)
+- Import order: React → third-party → internal aliases → relative → type-only imports
+
+Write only the component file at [file_path].
+```
+
+---
+
+After the agent completes, read the generated file and verify it looks correct before proceeding to 2f.
 
 ### 2f — TypeScript check after all components
 
@@ -446,4 +534,4 @@ Zero `error TS` = no hallucinated names.
 
 ## Next step
 
-After 2a–2g: load sub-skill `figma-to-component/phase2-production` for production readiness rules.
+After 2a–2g: load sub-skill `figma-to-feature/phase2-production` for production readiness rules.

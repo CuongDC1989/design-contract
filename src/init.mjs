@@ -12,6 +12,11 @@ const SKILLS_DIR = path.join(
   '../skills'
 );
 
+const AGENTS_DIR = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../agents'
+);
+
 const CONFIG_TEMPLATE = `import { CHECKS_STRICT, CHECKS_CONTAINER, CHECKS_LAYOUT } from '${PACKAGE_NAME}'
 
 export default {
@@ -41,20 +46,20 @@ export default {
 `;
 
 const SCRIPTS_TO_ADD = {
-  'figma:spec': 'design-contract fetch-spec',
-  'test:design': 'design-contract test',
-  'test:design:full': 'design-contract run',
+  'figma:spec': 'design-check fetch-spec',
+  'test:design': 'design-check test',
+  'test:design:full': 'design-check run',
 };
 
 export async function init() {
   const cwd = process.cwd();
 
-  const configPath = path.join(cwd, 'design-contract.config.mjs');
+  const configPath = path.join(cwd, 'design-check.config.mjs');
   if (existsSync(configPath)) {
-    console.log('⚠  design-contract.config.mjs already exists — skipping.');
+    console.log('⚠  design-check.config.mjs already exists — skipping.');
   } else {
     await fs.writeFile(configPath, CONFIG_TEMPLATE, 'utf8');
-    console.log('✓  Created design-contract.config.mjs');
+    console.log('✓  Created design-check.config.mjs');
   }
 
   const pkgPath = path.join(cwd, 'package.json');
@@ -80,19 +85,26 @@ export async function init() {
     console.log(`✓  Added ${added} script(s) to package.json`);
   }
 
-  const skillDestDir = path.join(cwd, '.claude', 'commands');
+  const skillDestDir = path.join(cwd, '.claude', 'skills');
   await fs.mkdir(skillDestDir, { recursive: true });
-  const installed = await copySkills(SKILLS_DIR, skillDestDir);
-  if (installed.length > 0) {
-    installed.forEach(f => console.log(`✓  Installed Claude skill: .claude/commands/${f}`));
+  const installedSkills = await copySkills(SKILLS_DIR, skillDestDir);
+  if (installedSkills.length > 0) {
+    installedSkills.forEach(f => console.log(`✓  Installed Claude skill: .claude/skills/${f}`));
+  }
+
+  const agentDestDir = path.join(cwd, '.claude', 'agents');
+  await fs.mkdir(agentDestDir, { recursive: true });
+  const installedAgents = await copySkills(AGENTS_DIR, agentDestDir);
+  if (installedAgents.length > 0) {
+    installedAgents.forEach(f => console.log(`✓  Installed Claude agent: .claude/agents/${f}`));
   }
 
   console.log('\nNext steps:');
-  console.log('  1. Fill in cases[] and contractCases[] in design-contract.config.mjs');
+  console.log('  1. Fill in cases[] and contractCases[] in design-check.config.mjs');
   console.log('  2. Add FIGMA_TOKEN and FIGMA_FILE_KEY to .env');
   console.log('  3. Run: npm run test:design:full');
-  console.log('  4. Use /figma-to-component in Claude Code to generate components from Figma');
-  console.log('  5. Use /create-story to wire individual components to Figma');
+  console.log('  4. Use /figma-to-feature in Claude Code to implement a full page from Figma');
+  console.log('  5. Use /figma-to-story to wire individual components to Figma');
 }
 
 async function copySkills(srcDir, destDir, relBase = '') {
@@ -112,7 +124,7 @@ async function copySkills(srcDir, destDir, relBase = '') {
       installed.push(...sub);
     } else if (entry.isFile() && entry.name.endsWith('.md')) {
       if (existsSync(dest)) {
-        console.log(`⚠  .claude/commands/${rel} already exists — skipping.`);
+        console.log(`⚠  ${path.relative(process.cwd(), dest)} already exists — skipping.`);
       } else {
         await fs.copyFile(src, dest);
         installed.push(rel);

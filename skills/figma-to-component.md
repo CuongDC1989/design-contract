@@ -1,197 +1,350 @@
-# Skill: figma-to-component
+# figma-to-component
 
-Generate a complete feature page — React components + Storybook stories + design-contract test config — from a Figma page, then iterate until all tests pass.
+Generate a single production-ready React component from a Figma design using multi-agent architecture.
 
-**This is the orchestrator.** It runs Phase 1 in full, then directs you to load a focused sub-skill for each subsequent phase. Loading sub-skills on demand keeps context lean (~300 lines active at a time instead of 1265).
+## Trigger
+
+- /figma-to-component
+- User mentions "generate component from figma", "figma to react", "convert figma to component"
+
+## Execution Rules
+
+**Think before spawning** — Before spawning the `frontend-developer` agent, confirm you have: file path, Figma data, Tailwind mapping, confirmed props interface, and user approval. Missing any of these = ask, not guess.
+
+**One component per run** — This skill generates exactly one component per invocation. Do not chain multiple components in a single agent call.
+
+**Simplicity first** — Pass only what the agent needs. Do not over-specify — if the Figma node has no shadow, don't mention shadow in the prompt.
+
+**Goal = match Figma** — The output must match the Figma design. Not "close enough", not "similar pattern from another component", not "how I'd normally build it".
+
+**No scope creep** — If the user asks for a `LoginCard`, generate `LoginCard` only. Do not generate `LoginButton`, `LoginInput`, or other components discovered in the Figma tree unless explicitly requested.
 
 ---
 
-## Workflow overview
+## Instructions
 
-| Phase | What happens | Sub-skill to load |
-|---|---|---|
-| 1 — Discovery | Read project state, fetch Figma page tree, build component map | _(this file — run in full)_ |
-| 2a — Implementation | Fetch node props, map Tailwind classes, write components | `figma-to-component/phase2-fetch` |
-| 2h — Production | Production readiness rules (text, states, forms, animation…) | `figma-to-component/phase2-production` |
-| 3 — Story + Config | Create stories, update design-contract.config.mjs | `figma-to-component/phase3-story` |
-| 4+5 — Iteration & Repair | Fix failing tests, repair mode, telemetry | `figma-to-component/phase4-repair` |
+You are an AI orchestrator that converts Figma designs into production-ready React/TypeScript components using a multi-agent architecture.
 
-**Loading instruction:** When transitioning between phases, invoke the Skill tool with the sub-skill name above. Do not proceed to the next phase without loading the corresponding sub-skill first.
+### Architecture Overview
 
----
+**Phase 1: Planning (Opus)**
+- Analyze Figma design structure
+- Break down into pages/screens
+- Create implementation plan for each screen
+- Define component hierarchy and data flow
 
-## Phase 1 — Discovery & Decomposition
+**Phase 2: Code Generation (Frontend Developer Agent)**
+- Ask user which model to use (default: `claude-sonnet-4-6`)
+- Spawn `frontend-developer` agent via Agent tool to generate complete React components
+- Agent handles CSS (Tailwind), JSX structure, TypeScript interfaces, and logic
+- Generates production-ready code following best practices
 
-### 1a — Read project state
+### Workflow
 
-Before touching Figma, understand what already exists:
+#### 1. Get Figma Design Input
 
-```bash
-# Existing components
-find src -name "*.tsx" ! -name "*.stories.tsx" ! -name "*.test.tsx"
-
-# Existing stories
-find src -name "*.stories.tsx"
-
-# Existing contract cases
-cat design-contract.config.mjs
-grep -E "^(FIGMA_TOKEN|FIGMA_FILE_KEY|STORYBOOK_URL)=" .env | sed 's/=.*/=<set>/'
+Ask user for Figma URL or use provided URL:
+```
+Please provide:
+1. Figma design URL (figma.com/design/... or figma.com/file/...)
+2. Specific node ID (optional - if you want a specific component/frame)
 ```
 
-Build a mental map:
-- Which components already exist?
-- Which already have stories?
-- Which are already wired in `design-contract.config.mjs`?
+#### 2. Detect Figma data source & Extract Design Context
 
-### 1b — Fetch Figma pages and let user choose
+First, detect which method is available — use it for all subsequent Figma fetches:
 
+- **Try** calling `figma___get_metadata` with the file key
+- If it returns data → **MCP mode**
+- If unavailable → **API mode**: load `FIGMA_TOKEN` + `FIGMA_FILE_KEY` from `.env`
+
+**[MCP]** Call in sequence:
+- `figma___get_metadata` — file structure, pages
+- `figma___get_design_context` with node ID — layout, fills, typography, effects
+- `figma___get_screenshot` with node ID — visual reference image
+
+**[API]** Use REST API:
 ```bash
-[ -f .env ] || { echo "ERROR: .env not found. Create it from .env.example"; exit 1; }
 source .env
-[ -n "$FIGMA_TOKEN" ]    || { echo "ERROR: FIGMA_TOKEN not set in .env"; exit 1; }
-[ -n "$FIGMA_FILE_KEY" ] || { echo "ERROR: FIGMA_FILE_KEY not set in .env"; exit 1; }
+# File structure
 curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY?depth=1" \
-  | node -e "
-    const raw = require('fs').readFileSync('/dev/stdin','utf8');
-    const d = JSON.parse(raw);
-    if (d.err || d.status === 403) { console.error('Figma API error:', d.err || d.status); process.exit(1); }
-    d.document.children.forEach((p, i) => console.log((i+1) + '.', p.name, '  [' + p.id + ']'));
-  "
-```
+  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY?depth=1"
 
-This prints a numbered list, e.g.:
-```
-1. Auth   [2397-45766]
-2. Users  [2397-46387]
-3. Moderation  [2397-47352]
-```
-
-Present this list to the user and ask: **"Which page number do you want to implement?"**
-
-The user replies with a number (e.g. `2`). Read the corresponding `[ID]` from the output above. Use that ID as `PAGE_ID` in section 1c.
-
-### 1c — Fetch all nodes on the page
-
-```bash
-# Replace PAGE_ID with the chosen page ID
-source .env
+# Node properties
 curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=PAGE_ID" \
-  | node -e "
-    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-    if (d.err || d.status === 403) { console.error('Figma API error:', d.err || d.status); process.exit(1); }
-    function walk(node, depth) {
-      if (depth > 2) return;
-      if (node.visible === false) return;
-      if ((node.opacity ?? 1) === 0) return;
-      if (/^_/.test(node.name)) return;
-      const w = node.absoluteBoundingBox?.width ?? 0;
-      const h = node.absoluteBoundingBox?.height ?? 0;
-      if (w < 4 && h < 4 && node.type !== 'COMPONENT') return;
-      console.log(' '.repeat(depth*2) + node.id + '  \"' + node.name + '\"  [' + node.type + ']');
-      (node.children || []).forEach(c => walk(c, depth+1));
-    }
-    Object.values(d.nodes).forEach(n => walk(n.document, 0));
-  "
+  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=NODE_ID"
+
+# Screenshot export URL
+curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
+  "https://api.figma.com/v1/images/$FIGMA_FILE_KEY?ids=NODE_ID&format=png&scale=2"
 ```
 
-**Node filtering heuristic** — nodes silently skipped:
-- `visible = false` — hidden in Figma
-- `opacity = 0` — fully transparent
-- Name starts with `_` — internal/helper frame convention
-- Width < 4px AND height < 4px (decorative dots/dividers) — unless COMPONENT
-- Type is MASK — skip entirely
-- Type is BOOLEAN_OPERATION — treat as icon (map to `<img>` or icon library)
+Extract from either source:
+- File key, node ID, component hierarchy
+- Design tokens (colors, spacing, typography)
 
-**Figma API fallback strategy** — when any curl call fails:
+#### 3. Analyze & Create Plan (Opus)
 
-| Error | Cause | Action |
-|---|---|---|
-| `"err": "Not found"` | Wrong NODE_ID or FILE_KEY | Re-check 1b output for correct IDs |
-| `"status": 403` | Token expired or wrong | Re-run `grep FIGMA_TOKEN .env` to verify |
-| `"status": 429` | Rate limited | Wait 30s, retry: `sleep 30 && <same curl>` |
-| Empty response / timeout | Network issue | Retry up to 3×; cache: `echo "$r" > /tmp/figma_cache_NODE_ID.json` |
-| Partial data (node missing props) | Figma API inconsistency | Use cached response; fallback to `absoluteBoundingBox` for size |
+Analyze the design and create a structured plan:
 
-For repeated 429s: batch node IDs — `ids=ID1,ID2,ID3` (comma-separated, max 1000 characters).
+```markdown
+## Design Analysis
 
-### 1d — Build Component Map
+**Pages/Screens Identified:**
+1. [Screen Name] - [Purpose]
+2. [Screen Name] - [Purpose]
 
-Map Figma node names → React component names. Rules:
-- Remove spaces, dashes, underscores — PascalCase each word: `"Login Card"` → `LoginCard`
-- Slash-scoped names: use part after last slash: `"Button/Primary"` → `Primary` (or keep both: `ButtonPrimary`)
-- Numbers: append as-is: `"Card 2"` → `Card2`
-- Page-level FRAME representing a routable view: append `Page` suffix: `"Auth"` → `AuthPage`, `"Users"` → `UsersPage`
-- GROUP nodes: map to a component only if the group has a meaningful name (not "Group 1", "Group 2", etc.). Unnamed/numbered groups → skip (treat as layout primitive)
-- Ignore RECTANGLE, VECTOR, ELLIPSE, INSTANCE with no meaningful name
-- **COMPONENT_SET nodes:** expand into variants — check `node.children` for variant names (e.g. `"State=Active"`, `"Type=Primary"`). Each variant becomes a separate Story export in Phase 3.
+**Component Hierarchy:**
+- Parent Component
+  - Child Component 1
+  - Child Component 2
+    - Nested Component
 
-For each mapped component, determine:
-- **File path:** `src/features/<feature>/<ComponentName>.tsx` (or `src/components/ui/<ComponentName>.tsx` for shared UI)
-- **testid:** `<feature>-<componentname>` (kebab-case, lowercase)
-- **Figma node ID:** from the tree output above
+**Design Tokens:**
+- Colors: [list]
+- Typography: [list]
+- Spacing: [list]
 
-Status values: `existing` (component file already exists), `new` (needs to be created), `skip` (existing + already has passing test)
+## Implementation Plan
 
-**Confidence scoring** — add a `conf` column to the map:
-- `high` — COMPONENT or COMPONENT_SET with a meaningful name, clearly maps to one React component
-- `med` — FRAME with auto-layout and recognizable name (Card, Modal, Header…)
-- `low` — GROUP, ambiguous FRAME, name like "Frame 42", >150px bounding with unclear purpose
+### Screen: [Name]
 
-For `low` confidence nodes: flag them and ask the user whether to implement or skip. Never silently generate a `low` confidence component.
+**Component Structure:**
+- Main component: `[ComponentName].tsx`
+- Sub-components: `[SubComponent].tsx`
 
-Present to user:
+**CSS Requirements:**
+- Layout: [flexbox/grid/etc]
+- Responsive breakpoints: [mobile/tablet/desktop]
+- Animations: [if any]
+- Custom styles: [if needed beyond Tailwind]
 
-```
-Component     Path                                    testid           Figma node ID  Status    Conf
-AuthPage    → src/features/auth/AuthPage.tsx           auth-authpage    2397-45766     existing  high
-LoginCard   → src/features/auth/LoginCard.tsx          auth-logincard   2397-45790     existing  high
-Frame42     → ???                                       ???              2397-45900     new        low  ← needs user input
-```
+**JSX Requirements:**
+- HTML structure
+- Conditional rendering
+- List rendering
+- Props interface
 
-**Checkpoint:** Ask the user to confirm or adjust the map. Do not proceed to Phase 2 until confirmed.
+**Logic Requirements:**
+- State variables: [list]
+- Event handlers: [list]
+- Side effects: [list]
+- API calls: [if any]
+- Form validation: [if any]
 
-> If a component already exists AND already has a passing design-contract test, mark it `skip` and exclude it from Phase 2.
-
-### 1e — Detect design system & reusable components
-
-Before writing any component code, check what UI infrastructure already exists:
-
-```bash
-# 1. Detect UI component library
-cat package.json | node -e "
-  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-  const deps = {...(d.dependencies||{}), ...(d.devDependencies||{})};
-  const libs = ['@radix-ui','shadcn','@mui/material','antd','@headlessui','@mantine','react-aria','@chakra-ui'];
-  const found = Object.keys(deps).filter(k => libs.some(l => k.startsWith(l)));
-  found.length ? found.forEach(k => console.log('UI lib:', k)) : console.log('No UI library — plain Tailwind project');
-"
-
-# 2. List existing shared UI components
-find src/components/ui -name "*.tsx" ! -name "*.stories.tsx" 2>/dev/null | sed 's|.*/||;s|\.tsx||' | sort
+**Data Flow:**
+- Props: [list with types]
+- State: [list with types]
+- Context: [if needed]
 ```
 
-**Reuse rules — apply in this order before creating anything new:**
+Show plan to user and ask for confirmation:
+```
+I've analyzed the Figma design. Here's my implementation plan:
 
-1. **UI library first:** If the project has Radix/shadcn/MUI, check if that library already provides the element (Button, Input, Select, Dialog, Badge, Tooltip…). **Import and use it.**
-2. **Project components second:** If `src/components/ui/` has a match, use it — adapt via props or a wrapper, not by reimplementing from scratch.
-3. **Create new only if:** no library match AND no existing project component match.
+[Show plan]
 
-> This step often eliminates 30–50% of the work in Phase 2. Always run it first.
+Should I proceed with code generation?
+```
 
----
+#### 4. Spawn Frontend Developer Agent
 
-## Transition to Phase 2
+Ask which model to use:
+```
+Which model should the frontend-developer agent use?
+  1. claude-sonnet-4-6 (default)
+  2. claude-opus-4-7
+  3. claude-haiku-4-5-20251001
+  [Enter number or press Enter for default]
+```
 
-Phase 1 is complete. Before starting implementation:
+After user confirms model, spawn the `frontend-developer` agent using the **Agent tool**:
 
-**Load sub-skill:** invoke `figma-to-component/phase2-fetch`
+```
+Goal: Generate production-ready React/TypeScript component for [ComponentName]
 
-That sub-skill covers:
-- Fetching detailed Figma node properties (2a scripts)
-- Tailwind class mapping tables (2c)
-- Writing the component (2e)
-- TypeScript check + anti-hallucination (2f, 2g)
+Context:
+- Design tokens: [colors, spacing, typography from Figma]
+- Component hierarchy: [from plan]
+- Layout requirements: [flexbox/grid, responsive breakpoints]
+- Props interface: [from plan]
+- State requirements: [from plan]
+- Event handlers: [from plan]
+- Figma screenshot: [attach image from step 2]
 
-After 2a–2g, load `figma-to-component/phase2-production` for production rules (2h) before moving to Phase 3.
+Tasks:
+1. Generate complete React component with TypeScript
+2. Create Tailwind CSS classes for styling (mobile-first)
+3. Implement JSX structure with semantic HTML
+4. Add TypeScript interfaces for props and state
+5. Implement event handlers and logic
+6. Include accessibility attributes (WCAG 2.2 AA)
+7. Add responsive design (mobile/tablet/desktop)
+8. Handle edge cases (loading, error, empty states)
+
+Output format:
+- Complete .tsx file with all imports, interfaces, and implementation
+- Separate types.ts if interfaces are complex
+- Custom CSS file only if Tailwind is insufficient
+- Component follows React best practices and project conventions
+```
+
+#### 5. Create Component Files
+
+After the agent completes, create the component files in the project:
+   ```
+   components/
+     [ComponentName]/
+       index.tsx          # Main component
+       [ComponentName].tsx # Component implementation
+       types.ts           # TypeScript interfaces
+       styles.css         # Custom CSS if needed
+   ```
+
+4. **Generate supporting files**:
+   - `types.ts` - TypeScript interfaces
+   - `constants.ts` - Constants if needed
+   - `utils.ts` - Helper functions if needed
+   - `README.md` - Component documentation
+
+#### 6. Create Files
+
+Ask user where to create files:
+```
+Where should I create the component files?
+1. Current directory
+2. Specify custom path
+3. Create in components/ directory
+```
+
+Create all files using the Create tool.
+
+#### 7. Verify & Document
+
+1. **Run type checking**:
+   ```bash
+   npx tsc --noEmit [ComponentName].tsx
+   ```
+
+2. **Check for missing dependencies**:
+   - Review imports
+   - Check if packages are installed
+   - Suggest installation commands if needed
+
+3. **Generate documentation**:
+   ```markdown
+   # [ComponentName]
+
+   ## Overview
+   [Brief description]
+
+   ## Props
+   | Prop | Type | Required | Default | Description |
+   |------|------|----------|---------|-------------|
+   | ... | ... | ... | ... | ... |
+
+   ## Usage
+   ```tsx
+   import { ComponentName } from './components/ComponentName';
+
+   function App() {
+     return <ComponentName prop1="value" />;
+   }
+   ```
+
+   ## Features
+   - [Feature 1]
+   - [Feature 2]
+
+   ## Figma Reference
+   [Figma URL]
+   ```
+
+4. **Show summary**:
+   ```
+   ✅ Generated [N] component files
+   ✅ Type checking passed
+   ✅ Documentation created
+
+   Files created:
+   - components/[ComponentName]/index.tsx
+   - components/[ComponentName]/types.ts
+   - components/[ComponentName]/README.md
+
+   Next steps:
+   1. Review the generated code
+   2. Install missing dependencies (if any)
+   3. Import and use the component
+   4. Customize as needed
+
+   Figma source: [URL]
+   ```
+
+### Best Practices
+
+**Code Quality:**
+- Use TypeScript strict mode
+- Follow React best practices (hooks rules, key props, etc.)
+- Use semantic HTML elements
+- Include accessibility attributes
+- Add proper error boundaries
+- Use meaningful variable names
+
+**Styling:**
+- Prefer Tailwind utility classes
+- Use CSS variables for theme values
+- Follow mobile-first responsive design
+- Include hover/focus states
+- Add smooth transitions
+
+**Performance:**
+- Use React.memo for expensive components
+- Lazy load heavy components
+- Optimize images
+- Avoid unnecessary re-renders
+
+**Maintainability:**
+- Keep components small and focused
+- Extract reusable logic to hooks
+- Document complex logic
+- Use consistent naming conventions
+
+### Error Handling
+
+If Figma MCP is not available:
+```
+Figma MCP is not connected. Add it with:
+  claude mcp add figma --transport http-sse https://mcp.figma.com/mcp
+
+Then restart Claude Code and try again.
+```
+
+If design is too complex:
+```
+This design is quite complex. I recommend breaking it into smaller components.
+Should I:
+1. Generate all components at once
+2. Let you choose which components to generate first
+3. Create a simplified version first
+```
+
+If agents fail:
+```
+One or more agents encountered an error. 
+[Show error details]
+
+Should I:
+1. Retry with the same plan
+2. Adjust the plan and retry
+3. Generate manually without agents
+```
+
+### Notes
+
+- Always show the plan before generating code
+- Allow user to modify the plan
+- Generate production-ready code, not prototypes
+- Include proper TypeScript types
+- Follow the project's existing code style if detected
+- Suggest improvements to the Figma design if issues found
+- Always link back to the Figma source
