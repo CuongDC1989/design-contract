@@ -6,6 +6,106 @@ Covers Phase 3: creating Storybook stories and updating design-check.config.mjs.
 
 ---
 
+## Phase 3 Pre-conditions — Validate before writing any story
+
+### P1 — Detect stack, check packages, verify Storybook runs
+
+**Step 1: Detect what's installed**
+
+```bash
+node -e "
+  const d = JSON.parse(require('fs').readFileSync('package.json','utf8'));
+  const all = {...(d.dependencies||{}), ...(d.devDependencies||{})};
+  const frameworks = ['next','react','vue','nuxt','svelte','astro','solid-js'];
+  const sbPkgs = Object.keys(all).filter(k => k.includes('storybook'));
+  const pwPkgs = Object.keys(all).filter(k => k.includes('playwright'));
+  console.log('=== Framework ===');
+  frameworks.forEach(f => all[f] && console.log(f+':', all[f]));
+  console.log('=== Storybook ===');
+  sbPkgs.length ? sbPkgs.forEach(k => console.log(k+':', all[k])) : console.log('NOT INSTALLED');
+  console.log('=== Playwright ===');
+  pwPkgs.length ? pwPkgs.forEach(k => console.log(k+':', all[k])) : console.log('NOT INSTALLED');
+"
+```
+
+**Step 2: If Storybook or Playwright is missing → install before continuing**
+
+Do NOT guess package names or versions. Use npm to look up the correct adapter for the detected framework:
+
+```bash
+# Check available versions of the correct Storybook adapter
+npm info @storybook/ADAPTER versions --json | node -e "
+  const v = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  console.log('Latest stable:', v.filter(x=>!x.includes('-')).slice(-5).join(', '));
+"
+
+# Confirm peerDeps cover the installed framework version
+npm info @storybook/ADAPTER@LATEST peerDependencies
+```
+
+Print proposed install commands and **ask the user to confirm** before running `npm install`.
+
+Standard adapter mapping (verify against npm before using):
+- `react` + Vite → `@storybook/react-vite`
+- `next` → `@storybook/nextjs` or `@storybook/experimental-nextjs-vite`
+- `vue 3` + Vite → `@storybook/vue3-vite`
+- `nuxt` → `@storybook/nuxt`
+- `svelte` + Vite → `@storybook/svelte-vite`
+
+If `.storybook/` directory does not exist, run `npx storybook@latest init --skip-install` after install.
+
+**Step 3: If Storybook starts but browser shows blank/compile error — plugin conflict**
+
+```bash
+# Read .storybook/main.* and check each plugin's peerDependencies
+cat node_modules/PLUGIN_NAME/package.json | node -e "
+  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  console.log('peerDeps:', JSON.stringify(d.peerDependencies));
+"
+```
+
+If `peerDependencies` don't cover the installed framework version, remove it in `viteFinal`:
+
+```ts
+viteFinal: async (config) => {
+  config.plugins = (config.plugins || []).filter((p: any) =>
+    !p?.name?.includes('THE_CONFLICTING_PLUGIN')
+  );
+  return config;
+},
+```
+
+**Step 4: Gate — confirm Storybook serves stories**
+
+```bash
+curl -s http://127.0.0.1:6006/index.json | node -e "
+  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  console.log('Stories registered:', Object.keys(d.entries || d.stories || {}).length);
+" 2>/dev/null || echo "Storybook not running"
+```
+
+Do not proceed until this returns at least 1 story.
+
+### P2 — settings.json must allow curl/node without prompts
+
+If `curl`, `node -e`, or `npm run` commands trigger confirmation dialogs, stop and add the missing patterns to `.claude/settings.json` before continuing. Manual confirmations on every API call break the workflow.
+
+---
+
+## Phase 3 Constraint — Never modify component CSS/logic
+
+**Phase 3 creates test infrastructure. It does not fix components.**
+
+The only component file allowed to be touched is `[Component].tsx` — **only** to add `data-testid` attributes. No CSS changes, no class changes, no logic changes, no prop changes.
+
+When tests run after Phase 3 and some fail:
+- **Correct response:** "Coverage is working. These failures are real Figma discrepancies — reporting them."
+- **Wrong response:** "I'll adjust the component CSS so the tests pass."
+
+A red test result after Phase 3 = the infrastructure is doing its job. Do not touch the component to make it green. Component fixes are a separate task, explicitly requested by the user.
+
+---
+
 ## Phase 3 — Story + Test Config
 
 ### 3a — Determine checks (fetch Figma node props — mandatory)
@@ -121,6 +221,40 @@ parameters: {
   layout: 'centered',  // or 'fullscreen' for pages
 }
 ```
+
+### 3d-pre — Mandatory gate: Verify story ID before updating config
+
+**Do NOT write to `design-check.config.mjs` or `design-spec.json` until this step passes.** An incorrect `storyId` causes all tests for this component to silently fail — the engine finds no story and reports nothing.
+
+**Story ID formula:**
+
+```
+title: 'Feature/ComponentName'   + export Default  → 'feature-componentname--default'
+title: 'Auth/LoginCard'          + export Default  → 'auth-logincard--default'
+title: 'Users/UserDetailDrawer'  + export Default  → 'users-userdetaildrawer--default'
+```
+
+⚠️ **Storybook v10 inserts a hyphen before digit sequences in export names:**
+```
+export Step1   → 'step-1'   (NOT 'step1')
+export Tab2    → 'tab-2'    (NOT 'tab2')
+export Default → 'default'  (no change — no digits)
+```
+
+**Verify against running Storybook:**
+
+```bash
+curl -s http://127.0.0.1:6006/index.json | node -e "
+  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  Object.values(d.entries || {}).forEach(s => console.log(s.id));
+" | grep 'componentname'
+```
+
+If the ID appears in the output → proceed to 3d.  
+If not found:
+- TypeScript errors may have prevented compilation → run `npx tsc --noEmit` first
+- Re-derive the ID from the formula (check for digit sequences in export names)
+- If Storybook is not running, mark as "unverified" and run the check in Step 3e before finalizing config
 
 ### 3d — Update design-check.config.mjs
 

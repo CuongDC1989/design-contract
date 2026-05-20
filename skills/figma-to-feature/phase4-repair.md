@@ -6,11 +6,21 @@ Covers Phase 4 (iteration loop) and Phase 5 (repair mode), plus Quick Reference,
 
 ## Execution Rules — repair is the highest-risk phase for scope creep
 
+**Phase 4 only runs when the user explicitly asks to fix a component to match Figma.**  
+If no such instruction exists, failing tests are the correct output — do not enter Phase 4 on your own initiative.
+
 **Diagnose before fixing** — Read the exact failure message and screenshot before touching any file. State in one sentence what is wrong and why.
 
 **One failure, one fix** — Fix the failing check only. Do not refactor surrounding code, rename variables, or clean up while you're in the file.
 
 **Surgical changes** — If `padding` is wrong, change only the padding class. If `border-radius` is wrong, change only the radius class. Do not restructure the JSX to fix a CSS value.
+
+**Fix to Figma, not to pass** — Every CSS change must be backed by a Figma node property. The correct workflow is:
+1. Read the test failure (e.g., `padding expected 24px, got 16px`)
+2. Fetch the Figma node and confirm the expected value (`paddingLeft: 24`)
+3. Update the component CSS to match Figma (`px-6` → `px-[24px]`)
+
+**Never reverse-engineer to pass.** If a test expects `24px` and you change the component to `24px` without confirming that value in Figma, you may be locking in a wrong value. Always trace back to the Figma source.
 
 **Fix code, not checks** — Never remove a check because it's hard to match. The only valid reason to remove a check is a confirmed null/0 Figma property (see 4d). Everything else means the component is wrong.
 
@@ -82,8 +92,14 @@ Read both screenshots to identify what specifically differs (spacing, color, siz
 ```
 Test fails
   ├── "story failed to load" or "timeout waiting for networkidle"
-  │     → Story file issue. Check all 6 rules from Phase 3c.
-  │     → Most common: missing `component` in meta, external URL in mock data
+  │     → First check: is #storybook-root hidden?
+  │       Open browser DevTools in Storybook iframe, run:
+  │         document.getElementById('storybook-root').style.display
+  │       If 'none' → story has a render error. Check the Console tab for the actual exception.
+  │       If '' (visible) → the test runner timed out, not a story error — check network/selector.
+  │     → Story file issue. Check all 7 rules from Phase 3c.
+  │     → Most common: missing `component` in meta, external URL in mock data,
+  │       inline <style> tag (React 19), unresolved import, TypeScript error in module graph
   │
   ├── "size mismatch" (width/height wrong)
   │     → Screenshot first — identify which dimension is wrong

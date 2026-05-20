@@ -8,10 +8,47 @@ Create React component stories wired to design-contract testing. Supports single
 
 The definition of success is: every component has a story, and every story compares as many CSS properties against Figma as possible. A test that fails because the component diverges from Figma is doing its job correctly — it surfaces a real discrepancy. A test that passes because checks were reduced is a false negative.
 
-- **Good outcome**: 20 components tested, 5 failing → the 5 failures are real bugs to fix
-- **Bad outcome**: 20 components tested, 20 passing → but 8 of them had checks removed to force a pass
+- **Good outcome**: 20 components tested, 5 failing → the 5 failures are real discrepancies to report
+- **Bad outcome**: 20 components tested, 20 passing → 8 had CSS quietly changed to match the test
 
 When in doubt, add more checks, not fewer.
+
+---
+
+## The Iron Rule: Never modify component CSS/logic to make a test pass
+
+**This skill creates test infrastructure. It does not fix components.**
+
+The only files this skill is allowed to touch on a component are:
+- `[Component].tsx` — **only** to add `data-testid` attributes. Nothing else.
+- `[Component].stories.tsx` — create/update story
+- `design-check.config.mjs` — add config entry
+- `design-spec.json` — sync spec entry
+
+**Forbidden at all times during this skill:**
+
+| Action | Why it's forbidden |
+|---|---|
+| Changing a Tailwind class to match what the test expects | Hides the discrepancy instead of surfacing it |
+| Changing a CSS value (color, spacing, radius…) because the test failed | The test failure IS the deliverable — it means Figma ≠ component |
+| Restructuring JSX to make a selector work | Scope creep; use a different selector instead |
+| Fixing "other issues" noticed while reading the component | Out of scope for this skill |
+| Removing a `check` entry to make a test pass | Reduces coverage; invalid except for structural impossibilities |
+
+**When a test fails after wiring:**
+
+```
+✓ CORRECT response: "Test for [component] is failing on [check]. 
+  This means the component diverges from Figma on [property]. 
+  Reporting as a discrepancy — no action taken."
+
+✗ WRONG response: "I'll adjust the padding to match the expected value 
+  so the test passes."
+```
+
+A failing test is the correct, intended output of this skill. It means the infrastructure is working. Component fixes belong to a separate task, driven by the user, after reviewing the discrepancy.
+
+**The only valid reason to touch component CSS:** the user explicitly says "fix this component to match Figma" as a separate instruction. Even then, changes must be driven by the Figma node data — not by reverse-engineering what value would make the test pass.
 
 ---
 
@@ -19,7 +56,7 @@ When in doubt, add more checks, not fewer.
 
 **Think before editing** — Before touching any file (component, story, config), state what changes and why. One sentence. If unclear, ask.
 
-**Scope = this component only** — Adding a story for `LoginCard` means touching `LoginCard.stories.tsx`, `LoginCard.tsx` (testid only if missing), and `design-check.config.mjs`. Nothing else.
+**Scope = testid + story + config only** — Adding a story for `LoginCard` means touching: `LoginCard.tsx` (add `data-testid` only), `LoginCard.stories.tsx`, `design-check.config.mjs`, `design-spec.json`. Nothing else. No CSS, no logic, no props.
 
 **Surgical testid placement** — Add `data-testid` only where needed for design-check. Do not reorganize the component, rename props, or fix other issues noticed while reading the file.
 
@@ -33,13 +70,23 @@ When in doubt, add more checks, not fewer.
 
 **Never declare done early** — A batch run is only complete when Step 5e (final audit) confirms zero remaining gaps. Do not mark the task done after the last component's Step 4 — always run the final audit first.
 
-**One component at a time, fully** — In batch mode, complete all steps (0c → 1 → 2 → 3 → 4) for one component before moving to the next. Do not interleave. Show progress: `[1/5] Wiring LoginCard...` before each component starts.
+**One component at a time, fully** — In batch mode, complete all steps (0d → 1 → 2 → 3 → 4) for one component before moving to the next. Do not interleave. Show progress: `[1/5] Wiring LoginCard...` before each component starts.
 
 **Fetch deep, not shallow** — Figma components may be nested 3–5 levels deep. Always use `depth=4` or the recursive walk to discover nested nodes. Never stop at `depth=2`.
 
-**Maximize checks, never reduce to pass** — A failing test means the component diverges from Figma. Fix the component, not the checks. Only remove a check when the Figma node structurally cannot be compared (e.g., a wrapper frame with no fill, a table row using table-layout). Never remove a check because the test is hard to fix or the difference looks small.
+**Maximize checks, never reduce to pass** — A failing test means the component diverges from Figma. Report it. Only remove a check when the Figma node structurally cannot be compared (e.g., a wrapper frame with no fill, a table row using table-layout). Never remove a check because the test is hard to fix or the difference looks small.
 
-**Coverage over pass rate** — The metric is how many components are tested and how many Figma properties are compared, not how many tests pass. A red test suite with full coverage is better than a green suite with reduced checks.
+**Coverage over pass rate** — The metric is how many components are tested and how many Figma properties are compared, not how many tests pass. A red test suite with full coverage is better than a green suite with hidden discrepancies.
+
+**Rationalization check** — If you find yourself thinking any of the following, STOP:
+
+| Thought | Reality |
+|---|---|
+| "I'll just tweak the padding so the test passes" | That hides a Figma discrepancy. Report it instead. |
+| "The difference is only 2px, I'll adjust it" | Not your call. Report it. |
+| "The designer probably intended this value" | You don't know that. Report the discrepancy. |
+| "I'll update the component so everything is green" | Green ≠ correct. Failing test = working coverage. |
+| "This check is hard to satisfy, I'll remove it" | Removing a check loses coverage permanently. |
 
 ---
 
@@ -67,7 +114,9 @@ If missing, create it now:
       "Bash(curl -s http://127.0.0.1:*)",
       "Bash(curl -s * http://127.0.0.1:*)",
       "Bash(curl -s http://localhost:*)",
+      "Bash(curl -s -L *)",
       "Bash(node -e *)",
+      "Bash(node scripts/*)",
       "Bash(cat *)",
       "Bash(find . *)",
       "Bash(grep *)",
@@ -82,17 +131,180 @@ These rules cover:
 - `npm run *` / `npm *` / `npx *` — running build, test, storybook, and figma:spec scripts
 - `source .env && curl *` — Figma API calls preceded by env loading (most common pattern in Steps 0b, 0c)
 - `curl -s -H * https://api.figma.com/*` — standalone Figma API calls
-- `curl -s http://127.0.0.1:*` / `curl -s http://localhost:*` — reading Storybook's `/index.json` (Step 5b)
+- `curl -s http://127.0.0.1:*` / `curl -s http://localhost:*` — reading Storybook's `/index.json` (Step 3e, Step 5b)
+- `curl -s -L *` — following redirects (Figma image exports)
 - `node -e *` — inline JSON parsing of Figma API responses
+- `node scripts/*` — running project-local scripts
 - `cat *` / `find . *` / `grep *` — discovery and config inspection (Step 0)
 - `mkdir -p *` — creating story subdirectories
 - `Read(**)` — reading all project files without prompting
 
 Once the file exists, all of the above run without confirmation prompts for the rest of the session.
 
+**⚠️ If any curl/node command still triggers a confirmation prompt** after settings.json exists, check: (a) the command pattern doesn't exactly match an allow rule, (b) the file was saved correctly with `cat .claude/settings.json`. Do NOT proceed manually confirming each call — fix the settings file first.
+
 ---
 
-## Step 0 — Always run discovery first
+## Step 0 — Validate environment before anything else
+
+**Run this before touching any story file or config.** Missing packages or a broken Storybook setup causes all subsequent steps to produce misleading results.
+
+### 0a — Detect project stack
+
+```bash
+node -e "
+  const d = JSON.parse(require('fs').readFileSync('package.json','utf8'));
+  const all = {...(d.dependencies||{}), ...(d.devDependencies||{})};
+  const frameworks = ['next','react','vue','nuxt','svelte','astro','solid-js','qwik'];
+  const sbPkgs = Object.keys(all).filter(k => k.includes('storybook'));
+  const pwPkgs = Object.keys(all).filter(k => k.includes('playwright'));
+  console.log('=== Framework ===');
+  frameworks.forEach(f => all[f] && console.log(f+':', all[f]));
+  console.log('=== Storybook packages ===');
+  sbPkgs.length ? sbPkgs.forEach(k => console.log(k+':', all[k])) : console.log('NONE — not installed');
+  console.log('=== Playwright packages ===');
+  pwPkgs.length ? pwPkgs.forEach(k => console.log(k+':', all[k])) : console.log('NONE — not installed');
+"
+```
+
+From this output, determine:
+- **Framework** and its **major version** (e.g. React 18, Next 15, Vue 3…)
+- **Storybook installed?** → if not, go to Step 0b
+- **Playwright installed?** → if not, go to Step 0b
+
+---
+
+### 0b — Install missing packages (when Storybook or Playwright is absent)
+
+**Only run this step if Step 0a shows packages missing.**
+
+#### B1 — Look up the correct packages for the detected framework
+
+Do NOT hardcode package names or versions. Instead:
+
+1. Search for the official Storybook adapter for the detected framework:
+   - Framework: **react (Vite)** → `@storybook/react-vite`
+   - Framework: **next** → `@storybook/nextjs` or `@storybook/experimental-nextjs-vite`
+   - Framework: **vue 3 (Vite)** → `@storybook/vue3-vite`
+   - Framework: **nuxt** → `@storybook/nuxt`
+   - Framework: **svelte (Vite)** → `@storybook/svelte-vite`
+   - Framework: **astro** → `@storybook/astro`
+   - Other → check https://storybook.js.org/docs/get-started/install
+
+2. Check npm for the latest compatible version of that adapter and `storybook` core that supports the project's framework version:
+
+```bash
+# Find latest stable version of the correct adapter
+npm info @storybook/react-vite versions --json | node -e "
+  const v = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  const stable = v.filter(x => !x.includes('-')).slice(-5);
+  console.log('Latest stable versions:', stable.join(', '));
+"
+
+# Check peerDependencies of that version to confirm compatibility
+npm info @storybook/react-vite@LATEST peerDependencies
+```
+
+3. For Playwright, check the version compatible with the installed Storybook:
+
+```bash
+npm info @playwright/test versions --json | node -e "
+  const v = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  console.log('Latest stable:', v.filter(x=>!x.includes('-')).slice(-3).join(', '));
+"
+```
+
+#### B2 — Confirm with user before installing
+
+**Do not run `npm install` without user confirmation.** Print the proposed install commands and ask:
+
+```
+I need to install the following packages to set up Storybook for [FRAMEWORK vX.Y]:
+
+  npm install --save-dev storybook@X.Y.Z @storybook/ADAPTER@X.Y.Z @storybook/addon-essentials@X.Y.Z
+  npm install --save-dev @playwright/test@X.Y.Z
+
+Does this look correct? Confirm to proceed, or tell me what to change.
+```
+
+#### B3 — Initialize Storybook config if `.storybook/` does not exist
+
+```bash
+ls .storybook/ 2>/dev/null || echo "No .storybook/ folder — needs init"
+```
+
+If missing, run the official initializer after user confirmation:
+
+```bash
+npx storybook@latest init --skip-install
+```
+
+Then verify `.storybook/main.ts` (or `main.js`) was created. Read it and confirm the `framework` field matches the detected stack before continuing.
+
+#### B4 — Verify installed packages actually work
+
+```bash
+# Confirm storybook CLI is callable
+npx storybook --version
+
+# Confirm playwright is callable
+npx playwright --version
+```
+
+If either fails after install, check that the package is in `devDependencies` and `node_modules/` exists (re-run `npm install` if needed).
+
+---
+
+### 0c — Validate Storybook config and plugin compatibility
+
+```bash
+# Show active Storybook config
+cat .storybook/main.ts 2>/dev/null || cat .storybook/main.js 2>/dev/null || cat .storybook/main.cjs 2>/dev/null
+```
+
+**Cross-reference each plugin listed in `addons` or `viteFinal` against the installed framework version:**
+
+```bash
+# For any plugin P registered in .storybook/main.*:
+cat node_modules/PLUGIN_NAME/package.json 2>/dev/null | node -e "
+  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  console.log('version:', d.version);
+  console.log('peerDeps:', JSON.stringify(d.peerDependencies, null, 2));
+"
+```
+
+If a plugin's `peerDependencies` do not cover the installed framework version → that plugin is likely the cause of blank-page or compile errors. Remove it in `viteFinal`:
+
+```ts
+viteFinal: async (config) => {
+  config.plugins = (config.plugins || []).filter((p: any) =>
+    !p?.name?.includes('THE_CONFLICTING_PLUGIN')
+  );
+  return config;
+},
+```
+
+After any config change, restart Storybook and proceed to Step 0d.
+
+---
+
+### 0d — Verify Storybook renders in browser (required gate)
+
+```bash
+# Confirm Storybook is serving stories
+curl -s http://127.0.0.1:6006/index.json | node -e "
+  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  const count = Object.keys(d.entries || d.stories || {}).length;
+  console.log('Stories registered:', count);
+  if (count === 0) console.error('WARNING: 0 stories returned — Storybook may still be starting');
+" 2>/dev/null || echo "Storybook not running yet"
+```
+
+**If Storybook is not running:** Ask the user to run `npm run storybook` and wait for the browser to show stories before continuing. **Do not proceed to any later step until this curl returns at least 1 story.**
+
+---
+
+### 0c — Discovery (component gap audit)
 
 Before doing anything else, read the current state:
 
@@ -518,6 +730,18 @@ export const Default: Story = {
 **Rule 6: Mock data cannot reference external URLs.**  
 Any file the story module imports — including mock data files in the same directory — must not contain CDN/external image URLs. Replace with SVG data URLs or empty strings.
 
+**Rule 7: A story is only "loaded" when `#storybook-root` is visible, not just when the page responds.**  
+Storybook sets `#storybook-root` to `display:none` (via CSS) when a story fails to render or throws an error. The page will respond with HTTP 200 and the sidebar will show the story — but the story has NOT loaded. Always verify the element is visible before declaring success.
+
+```bash
+# Check visibility state via browser console (open DevTools in Storybook iframe)
+# Run: document.getElementById('storybook-root').style.display
+# Expected: '' (empty = visible)
+# Failure: 'none' = story error state
+```
+
+When a test reports "story failed to load" or a screenshot shows a blank iframe, the first thing to check is whether `#storybook-root` is hidden. If it is, the story itself has an error — check Rules 1–6 above and the TypeScript check (Step 5a) before assuming the test runner has a problem.
+
 ---
 
 ### Templates
@@ -704,6 +928,50 @@ When the `shadow` check runs, it now verifies 4 properties — not just presence
 | `shadowColor` | CSS shadow color vs Figma drop shadow color |
 
 No config change needed — this is automatic when `'shadow'` is in `checks`.
+
+---
+
+## Step 3c — Mandatory gate: Verify story ID BEFORE writing config
+
+**Do NOT proceed to Step 4 until this step passes.** Writing an incorrect `storyId` to `design-check.config.mjs` and `design-spec.json` means every subsequent test will fail with a silent "not found" — the engine loads no story and reports nothing useful.
+
+### Story ID formula (apply step by step)
+
+```
+1. Take the title string in meta, e.g. 'Users/UserDetailDrawer'
+2. Lowercase everything:           'users/userdetaildrawer'
+3. Replace '/' with '-':           'users-userdetaildrawer'
+4. Replace spaces with '-':        'users-userdetaildrawer'
+5. Strip non-alphanumeric except '-'
+6. Append '--' + lowercased export name
+7. ⚠️  CRITICAL: Storybook v10 inserts a hyphen BEFORE digit sequences in export names:
+      export Step1   → 'step-1'   (NOT 'step1')
+      export Tab2    → 'tab-2'    (NOT 'tab2')
+      export Default → 'default'  (no digit, no change)
+
+Examples:
+  title: 'Users/UserDetailDrawer'  + export Default  → 'users-userdetaildrawer--default'  ✓
+  title: 'Onboarding/OnboardingFlow' + export Step1  → 'onboarding-onboardingflow--step-1' ✓  (NOT step1)
+  title: 'UI/Tab' + export Tab2                      → 'ui-tab--tab-2'                    ✓  (NOT tab2)
+```
+
+### Verify against running Storybook (required when Storybook is up)
+
+```bash
+# List all registered story IDs and grep for your component
+curl -s http://127.0.0.1:6006/index.json | node -e "
+  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  Object.values(d.entries || {}).forEach(s => console.log(s.id));
+" | grep 'yourcomponent'
+```
+
+**If the curl returns your expected ID → proceed to Step 4.**  
+**If the ID is not in the list:**
+- The story file may not have compiled — check Step 5a (TypeScript errors)
+- The formula was applied incorrectly — re-derive from the export name
+- Storybook may not have hot-reloaded yet — wait and retry
+
+**If Storybook is not running:** Derive the ID carefully from the formula above. Mark it as "unverified" and run the curl check in Step 5b before declaring done. Do not rely on the formula alone for export names containing digits.
 
 ---
 
@@ -1092,6 +1360,87 @@ If any column is left without a `size`, Chrome distributes excess to all columns
 `inline-flex` elements inherit `line-height` from their parent `<td>`. If the td has a large line-height (e.g., `leading-[22px]`) and the badge content is wide relative to the column, the badge may wrap to 2 lines and blow up the row height.
 
 Fix: add `whitespace-nowrap` and an explicit `leading-[Xpx]` on the badge span so it doesn't depend on the inherited line-height.
+
+---
+
+### `#storybook-root` is hidden — story has an error, not a test runner problem
+
+Storybook applies `display: none` to `#storybook-root` via CSS when the story fails to render (an exception during mount, an unresolved import, a React error boundary triggered). The test runner sees the page, but since `#storybook-root` is hidden it cannot locate elements → reports "story failed to load" or selector timeouts.
+
+**Diagnosis:** Open the Storybook URL in a browser, navigate to the story, open DevTools:
+
+```js
+// Run in browser console (inside Storybook iframe):
+document.getElementById('storybook-root').style.display
+// '' (empty) = story loaded fine
+// 'none'     = story has a render error — check the Console tab for the actual exception
+```
+
+**Common causes and fixes:**
+
+| Root cause | How to find it | Fix |
+|---|---|---|
+| React 19 `<style>` tag hoisting | Console shows "Cannot read properties of..." | Move inline `<style>` to `globals.css` (Rule 0) |
+| Missing `component` in meta | Console shows Storybook framework error | Add `component: ComponentName` to meta (Rule 1) |
+| Unresolved import in story or its deps | Console shows "Cannot find module ..." | Fix import path or add alias to `.storybook/main.ts` |
+| Required prop missing → undefined crash | Console shows `TypeError: Cannot read...` | Add all required props to `args` (Rule 5) |
+| TypeScript error in module graph | Build fails silently | Run `npx tsc --noEmit` and fix errors first |
+
+**Critical:** when `#storybook-root` is hidden, ALWAYS check the browser console for the underlying exception before modifying test config or story rules. The element being hidden is a symptom, not the cause.
+
+---
+
+### Storybook starts but browser shows blank page or compile error — Vite plugin incompatibility
+
+Symptom: `npm run storybook` runs without terminal errors, but opening the browser shows:
+- A blank white Storybook frame (no sidebar, no stories)
+- Or "Failed to compile" in the browser
+- Or stories appear in sidebar but iframe stays blank
+
+**This is a Vite plugin compatibility problem.** The specific cause depends on which framework and version the project uses — do NOT assume it is a specific plugin or a specific framework version.
+
+**Diagnosis process:**
+
+```bash
+# 1. Identify the framework and version
+node -e "
+  const d = JSON.parse(require('fs').readFileSync('package.json','utf8'));
+  const all = {...(d.dependencies||{}), ...(d.devDependencies||{})};
+  ['next','react','vue','nuxt','svelte','astro'].forEach(f => all[f] && console.log(f+':', all[f]));
+"
+
+# 2. List all Storybook-related and Vite plugins
+node -e "
+  const d = JSON.parse(require('fs').readFileSync('package.json','utf8'));
+  const all = {...(d.dependencies||{}), ...(d.devDependencies||{})};
+  Object.keys(all).filter(k => k.includes('storybook') || k.includes('vite-plugin')).forEach(k => console.log(k, all[k]));
+"
+
+# 3. Read the actual Storybook config to see what's registered
+cat .storybook/main.ts 2>/dev/null || cat .storybook/main.js 2>/dev/null
+
+# 4. For each plugin registered in viteFinal or addons, check its peerDependencies
+cat node_modules/PLUGIN_NAME/package.json | node -e "
+  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  console.log('version:', d.version, '\npeerDeps:', JSON.stringify(d.peerDependencies));
+"
+```
+
+**If a plugin's `peerDependencies` do not cover the installed framework version → that plugin is the likely culprit.**
+
+**Fix pattern — remove the conflicting plugin in `viteFinal`:**
+
+```ts
+viteFinal: async (config) => {
+  config.plugins = (config.plugins || []).filter((p: any) => {
+    const name = p?.name ?? '';
+    return !name.includes('THE_PLUGIN_NAME_FOUND_ABOVE');
+  });
+  return config;
+},
+```
+
+**Verification:** After the fix, run `npm run storybook`, open the browser, and confirm the sidebar lists stories before continuing.
 
 ---
 
