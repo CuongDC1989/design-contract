@@ -456,6 +456,13 @@ curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
   | node -e "
     const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
     const node = Object.values(d.nodes)[0].document;
+    // Walk the ENTIRE subtree — not just root — to detect text children
+    function firstTextNode(n) {
+      if (n.type === 'TEXT') return n;
+      for (const c of n.children ?? []) { const f = firstTextNode(c); if (f) return f; }
+      return null;
+    }
+    const textNode = firstTextNode(node);
     const props = {
       hasFill:       (node.fills || []).some(f => f.type !== 'IMAGE' && f.opacity !== 0),
       hasStroke:     (node.strokes || []).length > 0,
@@ -466,16 +473,34 @@ curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
       hasLayout:     node.layoutMode != null,
       hasPadding:    node.paddingLeft > 0 || node.paddingTop > 0,
       hasGap:        node.itemSpacing > 0,
-      hasText:       node.type === 'TEXT',
-      hasTypography: node.style != null,
+      hasText:       !!textNode,           // walks ENTIRE tree — true if any TEXT descendant exists
+      firstTextContent: textNode?.characters ?? null,  // preview which text will be checked
+      hasTypography: !!textNode?.style,    // true if first text descendant has style data
       hasOverflow:   node.clipsContent === true,
       hasSize:       node.absoluteBoundingBox != null,
       name:          node.name,
       type:          node.type,
     };
     console.log(JSON.stringify(props, null, 2));
+    if (!textNode) console.error('⚠ WARNING: No TEXT node found in subtree → expected.typography will be null → typography check silently skipped even with CHECKS_STRICT');
+    else console.log('✓ Typography data will be from text node:', JSON.stringify({ content: textNode.characters, fontFamily: textNode.style?.fontFamily, fontSize: textNode.style?.fontSize }));
   "
 ```
+
+**⚠️ CRITICAL — `hasText: false` means typography check will be silently skipped:**
+
+If the script above prints `hasText: false` (no TEXT node anywhere in the subtree) OR prints the warning line:
+- `expected.typography` will be `null` in `design-spec.json`
+- The engine condition is `if (checks.includes('typography') && expected.typography)` — **both must be true**
+- So `CHECKS_STRICT` will still skip the typography check silently — no error, no report
+
+**Fix when `hasText: false`:**
+
+| Situation | Fix |
+|---|---|
+| Component has text but it's inside a nested COMPONENT instance (API returns truncated data) | Fetch the component instance node directly with its own node ID; use that as `figmaNodeId` for a separate typography contract case |
+| Component genuinely has no text (icon-only, shape) | Remove `'typography'` and `'text'` from checks — this is a valid structural exception |
+| Page/section frame — text is deep in children | Use `depth=5` fetch (Step 0b command 3) to ensure text nodes are returned in API response |
 
 **Default check set: always start with `CHECKS_STRICT`.**
 
@@ -1123,6 +1148,33 @@ node -e "
 "
 ```
 
+### ⚠️ Mandatory: verify typography is not silently skipped
+
+After updating `design-spec.json`, run this check:
+
+```bash
+node -e "
+  const spec = JSON.parse(require('fs').readFileSync('design-spec.json','utf8'));
+  let ok = true;
+  Object.entries(spec.specs || {}).forEach(([name, entry]) => {
+    const hasTypoCheck = (entry.checks || []).includes('typography');
+    const hasTypoData  = !!entry.expected?.typography;
+    if (hasTypoCheck && !hasTypoData) {
+      console.log('⚠ SILENT SKIP: ' + name + ' — typography in checks but Figma node returned no text → check will be skipped');
+      ok = false;
+    } else if (hasTypoCheck && hasTypoData) {
+      console.log('✓ typography active: ' + name + ' → fontFamily=' + entry.expected.typography.fontFamily + ' size=' + entry.expected.typography.fontSize);
+    }
+  });
+  if (ok) console.log('All typography checks have data.');
+"
+```
+
+**If any `⚠ SILENT SKIP` line appears**, the typography check will do nothing for that component. Fix it:
+1. Fetch the Figma node with `depth=5` — confirm text nodes are in the API response
+2. If text is inside a nested COMPONENT instance → add a separate `contractCases` entry with `figmaNodeId` pointing to the instance that contains the text, with `checks: ['exists','typography','text']`
+3. If component genuinely has no text → remove `'typography'` and `'text'` from its checks explicitly
+
 For a sub-element tested inside a parent page story (with responsive):
 ```js
 // cases[] — one per breakpoint, parent storyId shared, sub-node figmaNodeId differs
@@ -1298,6 +1350,40 @@ Some components simulate borders with an absolutely-positioned `aria-hidden` chi
 ```
 
 If the overlay pattern is intentional and cannot be changed, remove `'border'` from `checks` for that contract case.
+
+---
+
+### Typography silently skipped — `expected.typography` is null
+
+**Symptom:** Typography check is in `checks[]` (or in `CHECKS_STRICT`) but the test report shows zero typography failures even when fonts clearly don't match Figma.
+
+**Root cause:** `fetch-spec` walks the Figma node tree to find the first TEXT node. If the API response for that node doesn't include text children (happens with nested component instances or when `depth` is too shallow), `expected.typography` is `null` → the engine condition `if (checks.includes('typography') && expected.typography)` short-circuits → the entire typography check is silently skipped.
+
+**Diagnosis:**
+```bash
+node -e "
+  const spec = JSON.parse(require('fs').readFileSync('design-spec.json','utf8'));
+  Object.entries(spec.specs || {}).forEach(([name, entry]) => {
+    console.log(name, '→ typography:', entry.expected?.typography ? 'HAS DATA ✓' : 'NULL ⚠ WILL BE SKIPPED');
+  });
+"
+```
+
+**Fixes:**
+
+1. **Re-fetch with deeper depth** — Run `npm run figma:spec` after increasing the Figma API fetch depth in your config or by using the depth=5 curl command from Step 0b to confirm text nodes appear in the API response.
+
+2. **Use inner node ID** — The outer FRAME node might not include text in a shallow API fetch. Find the inner frame or component instance that directly contains text and use its node ID as a separate `contractCases` entry:
+   ```js
+   // Separate typography-only case pointing to the inner text-bearing node
+   { name: 'component-typography', storyId: 'component--default', figmaNodeId: 'INNER_TEXT_NODE_ID', figmaScale: 2, viewport: { width: 300, height: 60 } },
+   // contractCases
+   { name: 'component-typography', checks: ['exists','typography','text'], selector: '[data-testid="component"] h2' }
+   ```
+
+3. **Confirmed no text** — If the Figma node is genuinely icon-only or shape-only, remove `'typography'` and `'text'` explicitly from checks. This is the ONLY valid reason to exclude them.
+
+**`typographySelector` does NOT fix this** — it only changes which browser element is measured. If `expected.typography` is null (Figma side has no data), there is nothing to compare regardless of `typographySelector`.
 
 ---
 
