@@ -26,6 +26,8 @@ Generate a single production-ready React component from a Figma design using mul
 
 **Decompose, then assemble** — When user asks for `ProductCard`, the output is: `Badge` + `Avatar` + `Button` + `ProductCard` (assembled from atoms). Generating only `ProductCard` as a monolith is a violation.
 
+**Responsive is mandatory, not optional** — Every component MUST support all breakpoints found in the Figma file. A component that only works at desktop width is incomplete. No component is "done" until responsive is verified at each breakpoint (Step 2d → Step 3 → Step 4 → Step 7).
+
 ---
 
 ## Instructions
@@ -111,7 +113,67 @@ Extract from either source:
 - Design tokens (colors, spacing, typography)
 - **Image node IDs** — collect all image nodes for export in next step
 
-#### 2b. Export Images from Design (for Mock Data)
+#### 2b. Detect Responsive Breakpoints from Figma
+
+**Before extracting images, scan the Figma file for multiple breakpoint frames.** Designers typically create separate frames per breakpoint, named or sized differently.
+
+**[MCP]** List all top-level frames on the relevant page:
+```
+figma___get_design_context(nodeId: PAGE_ID)
+→ Look at children frames — names like "Desktop", "Mobile", "Tablet", "1440", "768", "375"
+```
+
+**[API]** Fetch page children:
+```bash
+source .env
+curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
+  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=PAGE_ID&depth=2" \
+  | node -e "
+    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+    const page = Object.values(d.nodes)[0].document;
+    (page.children || []).forEach(f => {
+      const w = f.absoluteBoundingBox?.width;
+      console.log(f.id, '\t', f.name, '\t', w ? w+'px' : '?');
+    });
+  "
+```
+
+**Breakpoint detection rules:**
+
+| Frame width | Breakpoint | Tailwind prefix |
+|---|---|---|
+| ≥ 1280px | Desktop (xl) | default / `xl:` |
+| 1024px – 1279px | Large tablet (lg) | `lg:` |
+| 768px – 1023px | Tablet (md) | `md:` |
+| 640px – 767px | Small tablet (sm) | `sm:` |
+| < 640px | Mobile | `sm:` (base) |
+
+**Build a breakpoint map:**
+```
+RESPONSIVE FRAMES FOUND:
+- Desktop (1440px)  → node: XXXX-001  → Tailwind: default
+- Tablet  (768px)   → node: XXXX-002  → Tailwind: md:
+- Mobile  (375px)   → node: XXXX-003  → Tailwind: sm: (base)
+```
+
+If only ONE frame is found → still apply mobile-first defaults and flag to user:
+```
+⚠️  Only one breakpoint found in Figma (Xpx). Generating mobile-first responsive classes using standard breakpoints.
+```
+
+**Screenshot ALL breakpoint frames** (not just desktop):
+```bash
+# Get screenshot for each breakpoint frame
+curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
+  "https://api.figma.com/v1/images/$FIGMA_FILE_KEY?ids=DESKTOP_ID,TABLET_ID,MOBILE_ID&format=png&scale=1.5"
+# Save as: /tmp/figma-ref-[ComponentName]-desktop.png, -tablet.png, -mobile.png
+```
+
+Store breakpoint map as `responsiveFrames` — pass this to Step 3 and Step 4.
+
+---
+
+#### 2c. Export Images from Design (for Mock Data)
 
 After identifying image nodes, export them to get real URLs:
 
@@ -141,7 +203,7 @@ Store the result as `imageAssets` (remote URLs from Figma S3):
 }
 ```
 
-#### 2c. Download Images to Local (ALWAYS DO THIS)
+#### 2d. Download Images to Local (ALWAYS DO THIS)
 
 **Figma S3 URLs expire** — always download them to local before passing to the component.
 
@@ -220,25 +282,32 @@ DUPLICATE DETECTION:
 ```markdown
 ## Atomic Decomposition
 
-### Atoms (build first)
-| Component | Status | Props | Notes |
+### Responsive Breakpoints
+| Breakpoint | Figma frame | Width | Tailwind |
 |---|---|---|---|
-| `Button` | [REUSE] src/components/Button.tsx | - | already exists |
-| `Badge` | [CREATE] | variant, label, color | used in ProductCard + FilterTag |
-| `Avatar` | [CREATE] | src, size, alt | used in UserInfo + Comment |
-| `StarIcon` | [CREATE] | filled: boolean | used in RatingStars |
+| Desktop | XXXX-001 | 1440px | default |
+| Tablet | XXXX-002 | 768px | md: |
+| Mobile | XXXX-003 | 375px | base (sm:) |
+
+### Atoms (build first)
+| Component | Status | Props | Responsive behavior |
+|---|---|---|---|
+| `Button` | [REUSE] src/components/Button.tsx | - | full-width on mobile |
+| `Badge` | [CREATE] | variant, label, color | no change across breakpoints |
+| `Avatar` | [CREATE] | src, size, alt | size: 32px mobile / 40px desktop |
+| `StarIcon` | [CREATE] | filled: boolean | no change |
 
 ### Molecules (build second)
-| Component | Status | Composed of | Props |
+| Component | Status | Composed of | Responsive behavior |
 |---|---|---|---|
-| `RatingStars` | [CREATE] | StarIcon × 5 | rating: number, max: number |
-| `PriceTag` | [CREATE] | Text atoms | price, currency, discountPrice? |
-| `UserInfo` | [CREATE] | Avatar + Text | name, role, avatarSrc |
+| `RatingStars` | [CREATE] | StarIcon × 5 | hidden on mobile, visible md: |
+| `PriceTag` | [CREATE] | Text atoms | font-size smaller on mobile |
+| `UserInfo` | [CREATE] | Avatar + Text | stacks vertically on mobile |
 
 ### Organisms (build last)
-| Component | Status | Composed of | Props |
+| Component | Status | Composed of | Responsive behavior |
 |---|---|---|---|
-| `ProductCard` | [CREATE] | Badge + Avatar + RatingStars + PriceTag + Button | product: ProductType |
+| `ProductCard` | [CREATE] | Badge + Avatar + RatingStars + PriceTag + Button | grid-cols-1 mobile / grid-cols-2 md: |
 
 ## Build Order
 1. Badge, Avatar, StarIcon  ← atoms, no dependencies
@@ -247,11 +316,11 @@ DUPLICATE DETECTION:
 
 ## Design Tokens
 - Colors: [exact hex list]
-- Typography: [font sizes, weights]
-- Spacing: [px values used]
+- Typography: [font sizes, weights — per breakpoint if different]
+- Spacing: [px values used — per breakpoint if different]
 
 ## Image Assets (from Figma export)
-- [name]: [local path after step 2c download]
+- [name]: [local path after step 2d download]
 ```
 
 Show plan to user:
@@ -290,13 +359,23 @@ ATOMIC DESIGN RULES (strictly enforced):
 - Import atoms/molecules from their paths instead of inlining their markup
 - Never repeat JSX that could be its own component
 
+RESPONSIVE RULES (strictly enforced):
+- Use mobile-first: write base styles for mobile, override with `md:` / `lg:` / `xl:` for larger screens
+- NEVER use fixed pixel widths like `w-[400px]` on layout containers — use `w-full`, `max-w-[Xpx]`, or responsive variants
+- NEVER hardcode a layout as desktop-only — if the Figma only shows desktop, infer the mobile layout from the structure
+- When in doubt: stack vertically on mobile, place side-by-side on desktop
+- Check the responsive behavior table before writing a single class
+
 Component level: [Atom | Molecule | Organism]
 Dependencies (already created — import from these paths):
 - [AtomName] → [path]
 - [MoleculeName] → [path]
 
-CRITICAL: Match the Figma design EXACTLY — pixel-level accuracy is required.
-Figma screenshot: [ATTACH relevant section from step 2 — crop to this component only]
+CRITICAL: Match the Figma design EXACTLY at EVERY breakpoint.
+Figma screenshots (attach ALL):
+- Desktop (default): [ATTACH /tmp/figma-ref-[ComponentName]-desktop.png]
+- Tablet (md:): [ATTACH /tmp/figma-ref-[ComponentName]-tablet.png — if exists]
+- Mobile (base): [ATTACH /tmp/figma-ref-[ComponentName]-mobile.png — if exists]
 
 Context:
 - Design tokens: [colors (exact hex), spacing (px values), font sizes, weights]
@@ -304,8 +383,26 @@ Context:
 - Props interface: [from plan — minimal, focused props only]
 - Variants/states: [from Figma — e.g. default/hover/disabled/active]
 
+Responsive Behavior (from Step 2b breakpoint analysis):
+- Mobile (base / < 640px):
+  - Layout: [e.g. flex-col, full-width, hidden elements]
+  - Typography: [e.g. text-sm, font changes]
+  - Spacing: [e.g. px-4, gap-2]
+- Tablet (md: / 768px+):
+  - Layout: [e.g. flex-row, 2-column grid]
+  - Typography: [e.g. text-base]
+  - Spacing: [e.g. px-6, gap-4]
+- Desktop (lg: / 1024px+):
+  - Layout: [e.g. 3-column grid, sidebar visible]
+  - Typography: [e.g. text-lg for headings]
+  - Spacing: [e.g. px-8, gap-6]
+
+Elements that change visibility:
+- [ElementName]: hidden on mobile, block on md:
+- [ElementName]: block on mobile (hamburger menu), hidden on md:
+
 Image Assets (local paths — use in mock data):
-- [name]: "[local path from step 2c]"
+- [name]: "[local path from step 2d]"
 
 Mock Data Rules:
 - Use local Figma image paths for any image fields
@@ -314,7 +411,9 @@ Mock Data Rules:
 
 Tasks:
 1. One focused component, TypeScript, strict props interface
-2. Tailwind classes — match Figma exactly (use `w-[Xpx]` arbitrary values as needed)
+2. Tailwind classes — mobile-first, match Figma at every breakpoint
+   - Use `sm:`, `md:`, `lg:`, `xl:` prefixes for overrides
+   - Use arbitrary values (`w-[Xpx]`) only for fixed assets (icons, images) — never for layout containers
 3. Semantic HTML + accessibility (aria attributes, roles)
 4. Export named + default
 5. If Atom: include all visual variants as props (variant, size, color, disabled, etc.)
@@ -322,11 +421,14 @@ Tasks:
 7. If Organism: compose from imported molecules/atoms — no inline molecule markup
 
 Design Accuracy Checklist:
-- [ ] Colors match Figma exactly
-- [ ] Spacing/padding match Figma pixel values
-- [ ] Font sizes, weights, line heights match
+- [ ] Colors match Figma exactly at all breakpoints
+- [ ] Spacing/padding match Figma pixel values (per breakpoint)
+- [ ] Font sizes, weights, line heights match (per breakpoint)
 - [ ] Border radius, shadows match
+- [ ] Layout switches correctly at each breakpoint (columns → stack, etc.)
+- [ ] Elements that should hide/show at breakpoints are handled with `hidden md:block` etc.
 - [ ] Component is self-contained and has no hardcoded dependencies on parent context
+- [ ] No fixed-width layout containers (use responsive width classes)
 
 Output:
 - Single `.tsx` file + `types.ts` if props are complex
@@ -459,28 +561,37 @@ If server already running (port in use), skip start and use existing.
 
 ---
 
-##### 7c. Screenshot with Playwright
+##### 7c. Screenshot with Playwright (ALL breakpoints)
 
-Save the Figma reference screenshot to `/tmp/figma-ref-[ComponentName].png` first (if not already saved from step 2).
+Save Figma reference screenshots (already done in step 2b) — confirm these files exist:
+- `/tmp/figma-ref-[ComponentName]-desktop.png`
+- `/tmp/figma-ref-[ComponentName]-tablet.png` (if Figma had tablet frame)
+- `/tmp/figma-ref-[ComponentName]-mobile.png` (if Figma had mobile frame)
 
-Then capture rendered component:
+Then capture rendered component **at each breakpoint**:
 
 ```bash
 node -e "
 const { chromium } = require('playwright');
 (async () => {
   const browser = await chromium.launch();
-  const page = await browser.newPage();
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto('COMPONENT_URL', { waitUntil: 'networkidle' });
-  // Wait for fonts and images to load
-  await page.waitForTimeout(1500);
-  await page.screenshot({
-    path: '/tmp/rendered-[ComponentName]-iter[N].png',
-    clip: { x: 0, y: 0, width: 1280, height: 900 }
-  });
+  const viewports = [
+    { name: 'desktop', width: 1280, height: 900 },
+    { name: 'tablet',  width: 768,  height: 1024 },
+    { name: 'mobile',  width: 375,  height: 812 },
+  ];
+  for (const vp of viewports) {
+    const page = await browser.newPage();
+    await page.setViewportSize({ width: vp.width, height: vp.height });
+    await page.goto('COMPONENT_URL', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(1500);
+    await page.screenshot({
+      path: '/tmp/rendered-[ComponentName]-' + vp.name + '-iter[N].png',
+    });
+    await page.close();
+    console.log('Screenshot saved:', vp.name);
+  }
   await browser.close();
-  console.log('Screenshot saved');
 })().catch(e => { console.error(e); process.exit(1); });
 "
 ```
@@ -489,20 +600,22 @@ Replace `[N]` with current iteration number (1, 2, 3).
 
 ---
 
-##### 7d. AI Visual Diff (CRITICAL STEP)
+##### 7d. AI Visual Diff (CRITICAL STEP — run for EACH breakpoint)
 
-Load **both images** into context and compare:
-- `figma_reference` = Figma screenshot from step 2 (ground truth)
-- `rendered` = screenshot from 7c
+Load **all breakpoint image pairs** into context and compare:
+- `figma_desktop` vs `rendered_desktop`
+- `figma_tablet` vs `rendered_tablet` (if tablet frame existed)
+- `figma_mobile` vs `rendered_mobile` (if mobile frame existed)
 
-**Comparison checklist — check every item:**
+**Comparison checklist — check every item at EVERY breakpoint:**
 
 | Category | What to check |
 |---|---|
-| **Layout** | Overall structure matches? Columns, rows, alignment |
-| **Spacing** | Padding/margin/gap between elements — exact px |
+| **Layout** | Structure matches at this breakpoint? Columns collapse to rows? |
+| **Responsive switches** | Elements that should hide/show at this viewport are correct? |
+| **Spacing** | Padding/margin/gap between elements — exact px (may differ per breakpoint) |
 | **Colors** | Background, text, border, icon colors — exact hex |
-| **Typography** | Font size, weight, line-height, letter-spacing |
+| **Typography** | Font size, weight, line-height (may differ per breakpoint) |
 | **Sizing** | Width, height of cards, buttons, images, icons |
 | **Border/Radius** | Border-radius, border-width, border-color |
 | **Shadows** | Box-shadow presence, offset, blur, color |
@@ -510,16 +623,26 @@ Load **both images** into context and compare:
 | **Text** | Content matches Figma labels exactly |
 | **States** | Hover, active, disabled states visible if shown in Figma |
 
-Output the diff as a structured list:
+Output the diff as a structured list **per breakpoint**:
 ```
 DIFF REPORT — Iteration [N]
+
+[DESKTOP — 1280px]
 ✅ PASS: [items that match]
 ❌ FAIL:
   1. [Element]: Figma=[value] | Rendered=[value] | Fix=[specific CSS/class change]
-  2. [Element]: Figma=[value] | Rendered=[value] | Fix=[specific CSS/class change]
-  ...
 
-MATCH SCORE: [X/10 items match]
+[TABLET — 768px]
+✅ PASS: [items that match]
+❌ FAIL:
+  1. [Element]: Figma=[value] | Rendered=[value] | Fix=[specific CSS/class change]
+
+[MOBILE — 375px]
+✅ PASS: [items that match]
+❌ FAIL:
+  1. [Element]: Figma=[value] | Rendered=[value] | Fix=[specific CSS/class change]
+
+OVERALL MATCH SCORE: [X/10 per breakpoint, e.g. Desktop 9/10, Tablet 8/10, Mobile 7/10]
 ```
 
 ---
@@ -542,19 +665,24 @@ After applying all fixes, go back to **step 7c** (re-screenshot, increment itera
 ##### 7f. Loop Exit Conditions
 
 ```
-IF match score >= 9/10 → PASS ✅ — proceed to step 8
-IF iteration == 3 AND score < 9/10 → ESCALATE to user:
+IF all breakpoints score >= 9/10 → PASS ✅ — proceed to step 8
+IF any breakpoint score < 9/10 AND iteration < 3 → fix that breakpoint's issues → re-screenshot → repeat
+IF iteration == 3 AND any breakpoint score < 9/10 → ESCALATE to user:
   Show:
-  - Figma reference image
-  - Best rendered screenshot (highest score iteration)
-  - Remaining diff list
-  Ask: "These [N] issues remain after 3 iterations. Should I:
+  - Figma reference images (all breakpoints)
+  - Best rendered screenshots (highest score iteration, all breakpoints)
+  - Remaining diff list per breakpoint
+  Ask: "These [N] issues remain after 3 iterations:
+    - Desktop: [list]
+    - Tablet: [list]
+    - Mobile: [list]
+  Should I:
     1. Try 3 more iterations
     2. Show me exactly what to fix manually
     3. Accept current state"
 ```
 
-**Do NOT mark component as done until score ≥ 9/10 or user explicitly accepts.**
+**Do NOT mark component as done until ALL breakpoints score ≥ 9/10 or user explicitly accepts.**
 
 ---
 
@@ -594,9 +722,37 @@ IF iteration == 3 AND score < 9/10 → ESCALATE to user:
 - Custom styles that Tailwind can't handle → write to **global CSS** (`globals.css` / `index.css`) inside `@layer components { }` or `@layer utilities { }`
 - Design tokens (colors, spacing, radii, shadows) → CSS variables in `:root` inside global CSS, then reference via Tailwind config or `var(--token)`
 - **Never create a CSS file scoped to one component** — it pollutes the global namespace without the scoping benefit of CSS Modules
-- Follow mobile-first responsive design (`sm:` `md:` `lg:` prefixes)
 - Include hover/focus/disabled states (`hover:` `focus:` `disabled:` variants)
 - Add smooth transitions via Tailwind (`transition-all duration-200`)
+
+**Responsive (mandatory — not optional):**
+- **Mobile-first always** — base classes = mobile styles; `md:`, `lg:`, `xl:` = overrides for larger screens
+- **Never use fixed-width layout containers** — `w-[400px]` on a card or page section is wrong; use `w-full max-w-[400px]` or responsive variants
+- **Layout switching pattern:**
+  ```tsx
+  // Stack on mobile, side-by-side on tablet+
+  <div className="flex flex-col md:flex-row gap-4">
+  
+  // Single column mobile, 2-col tablet, 3-col desktop
+  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+  ```
+- **Visibility switching pattern:**
+  ```tsx
+  // Hamburger: show mobile, hide desktop
+  <button className="block md:hidden">☰</button>
+  // Nav: hide mobile, show desktop
+  <nav className="hidden md:flex gap-6">
+  ```
+- **Typography scaling pattern:**
+  ```tsx
+  <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold">
+  <p className="text-sm md:text-base">
+  ```
+- **Spacing scaling pattern:**
+  ```tsx
+  <section className="px-4 md:px-8 lg:px-16 py-8 md:py-12">
+  ```
+- **Images:** always use `w-full h-auto` or `object-cover` with `aspect-ratio` classes — never fixed `w-[Xpx] h-[Ypx]` on images that span layout
 
 **Global CSS structure** (`globals.css`):
 ```css

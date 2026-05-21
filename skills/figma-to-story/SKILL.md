@@ -78,6 +78,8 @@ A failing test is the correct, intended output of this skill. It means the infra
 
 **Coverage over pass rate** — The metric is how many components are tested and how many Figma properties are compared, not how many tests pass. A red test suite with full coverage is better than a green suite with hidden discrepancies.
 
+**Responsive contract cases are mandatory** — Every component that has multiple breakpoint frames in Figma MUST have a separate contract case per breakpoint. A component tested only at desktop viewport is incomplete coverage. See Step 0b-responsive and Step 3-responsive for how to detect and wire breakpoints.
+
 **Rationalization check** — If you find yourself thinking any of the following, STOP:
 
 | Thought | Reality |
@@ -333,6 +335,52 @@ Build a mental map:
 
 Use `FIGMA_TOKEN` and `FIGMA_FILE_KEY` from `.env` to browse the Figma file and resolve node IDs automatically — no manual copy-paste needed.
 
+### 0b-responsive — Detect breakpoint frames per component
+
+**Before resolving individual node IDs, scan for responsive variants.** Designers typically create separate frames per breakpoint, either as sibling frames or as named variants inside the same component.
+
+```bash
+source .env
+# List all top-level frames on the page — look for width differences or naming patterns
+curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
+  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=PAGE_ID&depth=2" \
+  | node -e "
+    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+    const page = Object.values(d.nodes)[0].document;
+    (page.children || []).forEach(f => {
+      const w = f.absoluteBoundingBox?.width;
+      console.log(f.id + '\t' + f.name + '\t' + (w ? w + 'px' : '?'));
+    });
+  "
+```
+
+**Breakpoint identification rules:**
+
+| Frame width | Breakpoint label | Tailwind | `viewport` in config |
+|---|---|---|---|
+| ≥ 1280px | Desktop | default | `{ width: 1280, height: 900 }` |
+| 1024px – 1279px | Large tablet | `lg:` | `{ width: 1024, height: 768 }` |
+| 768px – 1023px | Tablet | `md:` | `{ width: 768, height: 1024 }` |
+| < 640px | Mobile | base | `{ width: 375, height: 812 }` |
+
+**Also detect by naming conventions:**
+- Frame named "Desktop", "Desktop / 1440", "Web" → desktop
+- Frame named "Tablet", "iPad", "768" → tablet
+- Frame named "Mobile", "iPhone", "375", "390" → mobile
+
+**Build a responsive node map for each component:**
+
+```
+Component: UsersPage
+  Desktop → node: 2397-46387  viewport: 1280×900
+  Tablet  → node: 2397-46501  viewport: 768×1024
+  Mobile  → node: 2397-46612  viewport: 375×812
+```
+
+If only ONE frame exists for a component, note it and use its width as the single viewport — do NOT invent breakpoints that aren't in Figma.
+
+---
+
 **1. Get pages in the file:**
 
 ```bash
@@ -505,12 +553,12 @@ This means **including a check type catches both missing AND extra properties**.
 Print the confirmed list in this format:
 ```
 Gap list — N components to wire:
-[1/N] ComponentName       figma: XXXX-XXXX   ✓ matched
-[2/N] ComponentName2      figma: XXXX-YYYY   ✓ matched
-[3/N] ComponentName3      figma: (no match)  ← needs node ID from user
+[1/N] ComponentName    desktop: XXXX-0001 (1280px) ✓   tablet: XXXX-0002 (768px) ✓   mobile: XXXX-0003 (375px) ✓
+[2/N] ComponentName2   desktop: XXXX-YYYY (1440px) ✓   (no tablet/mobile frames found)
+[3/N] ComponentName3   figma: (no match) ← needs node ID from user
 ```
 
-**Do not start Step 1 for any component until every row in this list has a node ID.**
+**Do not start Step 1 for any component until every row in this list has at least one node ID.**
 
 If the user provides node IDs for the unmatched components, update the list and confirm again before proceeding.
 
@@ -544,17 +592,18 @@ Still run Step 0c to determine checks before writing config.
 - PlanBadge ✓
 ```
 
-3. Run Step 0b to discover Figma node IDs for all gaps. Then run Step 0d (mandatory gate) — resolve ALL node IDs before writing anything.
+3. Run Step 0b (including Step 0b-responsive) to discover Figma node IDs AND breakpoint frames for all gaps. Then run Step 0d (mandatory gate) — resolve ALL node IDs before writing anything.
 4. Announce: "Wiring all N gaps in order. Starting with [ComponentName]..."
 5. For each gap in sequence, show progress and complete all steps:
    ```
    [1/N] Wiring ComponentName...
-     → Step 0c: fetch Figma node properties
+     → Step 0b-responsive: detect breakpoint frames (desktop/tablet/mobile)
+     → Step 0c: fetch Figma node properties (per breakpoint)
      → Step 1: add data-testid
      → Step 2: create story file
-     → Step 3: choose config values
-     → Step 4: update config + design-spec.json
-     ✓ ComponentName done
+     → Step 3: choose config values (one entry per breakpoint)
+     → Step 4: update config + design-spec.json (all breakpoint entries)
+     ✓ ComponentName done (desktop ✓ tablet ✓ mobile ✓)
 
    [2/N] Wiring ComponentName2...
    ...
@@ -822,11 +871,37 @@ const mockUser = {
 | Medium container (card, panel) | `1` |
 | Small component (badge, avatar, input, row) | `2` |
 
-**`viewport`:**
-| Component type | viewport |
+**`viewport`** — match the actual Figma frame width for that breakpoint:
+| Figma frame width | viewport to use |
 |---|---|
-| Full page | `{ width: 1200, height: 900 }` |
+| ≥ 1280px (Desktop) | `{ width: 1280, height: 900 }` |
+| ~1024px (Large tablet) | `{ width: 1024, height: 768 }` |
+| ~768px (Tablet) | `{ width: 768, height: 1024 }` |
+| ~375–390px (Mobile) | `{ width: 375, height: 812 }` |
 | Isolated small component | match natural size, e.g. `{ width: 250, height: 80 }` |
+
+**Responsive contract cases (mandatory when multiple breakpoints exist):**
+
+When Step 0b-responsive found multiple breakpoint frames for a component, create **one `cases[]` + `contractCases[]` entry per breakpoint**. Use a consistent naming suffix: `--desktop`, `--tablet`, `--mobile`.
+
+```js
+// cases[] — one per breakpoint, each pointing to the correct Figma frame node
+{ name: 'users-userspage--desktop', storyId: 'users-userspage--default', figmaNodeId: 'DESKTOP_NODE_ID', figmaScale: 1, viewport: { width: 1280, height: 900 } },
+{ name: 'users-userspage--tablet',  storyId: 'users-userspage--default', figmaNodeId: 'TABLET_NODE_ID',  figmaScale: 1, viewport: { width: 768,  height: 1024 } },
+{ name: 'users-userspage--mobile',  storyId: 'users-userspage--default', figmaNodeId: 'MOBILE_NODE_ID',  figmaScale: 1, viewport: { width: 375,  height: 812 } },
+
+// contractCases[] — same selector for all breakpoints; viewport is driven by cases[]
+{ name: 'users-userspage--desktop', checks: CHECKS_STRICT, selector: '[data-testid="users-page"]' },
+{ name: 'users-userspage--tablet',  checks: CHECKS_STRICT, selector: '[data-testid="users-page"]' },
+{ name: 'users-userspage--mobile',  checks: CHECKS_CONTAINER, selector: '[data-testid="users-page"]' },
+```
+
+**Why different checks per breakpoint?** Mobile layouts often collapse columns, hide elements, or remove shadows — choose the strictest `checks` set that the Figma mobile frame actually has. If the mobile frame has no layout (flex/gap), remove `'layout'` from its checks.
+
+**When only ONE Figma frame exists** — use that frame's width as the single viewport. Do not add breakpoint suffixes; use `--default`:
+```js
+{ name: 'users-badge--default', storyId: 'users-badge--default', figmaNodeId: 'ONLY_NODE', figmaScale: 2, viewport: { width: 250, height: 80 } },
+```
 
 **`checks`** — determined by Step 0c Figma node properties, not by assumption:
 
@@ -981,34 +1056,54 @@ curl -s http://127.0.0.1:6006/index.json | node -e "
 
 **Check first:** Read the current config. If this component's `name` already exists in `cases[]` or `contractCases[]`, update the existing entry rather than adding a duplicate.
 
-Add one entry to `cases[]` and one to `contractCases[]` in the config:
+**Responsive-aware config (multiple breakpoints):**
+
+When Step 0b-responsive found multiple breakpoint frames, add one entry per breakpoint:
+
+```js
+// cases[] — each breakpoint gets its own entry with the correct figmaNodeId + viewport
+{ name: 'feature-component--desktop', storyId: 'feature-component--default', figmaNodeId: 'DESKTOP_NODE', figmaScale: 1, viewport: { width: 1280, height: 900 } },
+{ name: 'feature-component--tablet',  storyId: 'feature-component--default', figmaNodeId: 'TABLET_NODE',  figmaScale: 1, viewport: { width: 768,  height: 1024 } },
+{ name: 'feature-component--mobile',  storyId: 'feature-component--default', figmaNodeId: 'MOBILE_NODE',  figmaScale: 1, viewport: { width: 375,  height: 812 } },
+
+// contractCases[] — same selector, but checks may differ per breakpoint
+{ name: 'feature-component--desktop', checks: CHECKS_STRICT,    selector: '[data-testid="component"]' },
+{ name: 'feature-component--tablet',  checks: CHECKS_STRICT,    selector: '[data-testid="component"]' },
+{ name: 'feature-component--mobile',  checks: CHECKS_CONTAINER, selector: '[data-testid="component"]' },
+```
+
+**Single-breakpoint config (when only one Figma frame exists):**
 
 ```js
 // cases[]
-{ name: 'feature-component--variant', storyId: 'feature-component--variant', figmaNodeId: 'XXXX-XXXX', figmaScale: 1, viewport: { width: 1200, height: 900 } },
+{ name: 'feature-component--default', storyId: 'feature-component--default', figmaNodeId: 'XXXX-XXXX', figmaScale: 1, viewport: { width: 1280, height: 900 } },
 
 // contractCases[]
-{ name: 'feature-component--variant', checks: CHECKS_STRICT, selector: '[data-testid="component"]' },
+{ name: 'feature-component--default', checks: CHECKS_STRICT, selector: '[data-testid="component"]' },
 ```
 
 Then apply the same `checks` change to `design-spec.json` — find the entry by name and update its `checks` array to match:
 
 ```bash
-# Verify both files agree on checks
+# Verify both files agree on checks for all breakpoint entries
 node -e "
   const spec = JSON.parse(require('fs').readFileSync('design-spec.json','utf8'));
-  const name = 'feature-component--variant';
-  console.log(spec.specs[name]?.checks);
+  ['desktop','tablet','mobile'].forEach(bp => {
+    const name = 'feature-component--' + bp;
+    if (spec.specs[name]) console.log(name, spec.specs[name].checks);
+  });
 "
 ```
 
-For a sub-element tested inside a parent page story:
+For a sub-element tested inside a parent page story (with responsive):
 ```js
-// cases[] — parent story captures the viewport, Figma node is the sub-node
-{ name: 'feature-element--default', storyId: 'feature-parentpage--default', figmaNodeId: 'XXXX-XXXX', figmaScale: 1, viewport: { width: 1200, height: 900 } },
+// cases[] — one per breakpoint, parent storyId shared, sub-node figmaNodeId differs
+{ name: 'feature-element--desktop', storyId: 'feature-parentpage--default', figmaNodeId: 'ELEM_DESKTOP_NODE', figmaScale: 1, viewport: { width: 1280, height: 900 } },
+{ name: 'feature-element--mobile',  storyId: 'feature-parentpage--default', figmaNodeId: 'ELEM_MOBILE_NODE',  figmaScale: 1, viewport: { width: 375,  height: 812 } },
 
-// contractCases[] — selector finds the element within the parent story
-{ name: 'feature-element--default', checks: CHECKS_STRICT, selector: '[data-testid="element"]' },
+// contractCases[] — selector finds the element at each viewport
+{ name: 'feature-element--desktop', checks: CHECKS_STRICT, selector: '[data-testid="element"]' },
+{ name: 'feature-element--mobile',  checks: CHECKS_LAYOUT, selector: '[data-testid="element"]' },
 ```
 
 ---
@@ -1084,23 +1179,28 @@ grep "name:" design-check.config.mjs
 find src -name "*.stories.tsx"
 ```
 
-Cross-check against the original gap list from Step 0. Print the result:
+Cross-check against the original gap list from Step 0. Print the result, including breakpoint coverage:
 
 ```
 Final audit — N components:
-[1/N] LoginCard       story ✓   cases ✓   contractCases ✓
-[2/N] StatusBadge     story ✓   cases ✓   contractCases ✓
-[3/N] AvatarCell      story ✓   cases ✓   contractCases ✓
+[1/N] LoginCard    story ✓   desktop ✓   tablet ✓   mobile ✓
+[2/N] StatusBadge  story ✓   desktop ✓   (single-frame, no tablet/mobile in Figma)
+[3/N] AvatarCell   story ✓   desktop ✓   mobile ✓
 ...
 All N gaps closed. ✓
 ```
 
+**Breakpoint coverage rules:**
+- Component has 3 Figma frames (desktop/tablet/mobile) → must show `desktop ✓  tablet ✓  mobile ✓`
+- Component has only 1 Figma frame → note `(single-frame)` — no breakpoint suffixes needed
+- Component has 2 Figma frames → cover both, skip the missing one
+
 If any row is missing a checkmark:
-- Return to Step 0c for that component
-- Complete Steps 1 → 4
+- Return to Step 0b-responsive for that component to confirm which breakpoint frames exist
+- Complete Steps 1 → 4 for the missing breakpoint entries
 - Re-run Step 5e until every row is fully checked
 
-**Do not declare the task done until every gap shows `story ✓   cases ✓   contractCases ✓`.**
+**Do not declare the task done until every gap shows full breakpoint coverage or is documented as single-frame.**
 
 ---
 
