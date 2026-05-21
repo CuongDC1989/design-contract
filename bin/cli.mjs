@@ -11,13 +11,13 @@ try { await import('dotenv/config'); } catch {}
 const command = process.argv[2];
 
 async function loadConfig() {
-  const configPath = path.resolve(process.cwd(), 'design-contract.config.mjs');
+  const configPath = path.resolve(process.cwd(), 'design-check.config.mjs');
   try {
     const { default: config } = await import(configPath);
     return config;
   } catch {
-    console.error(`Error: design-contract.config.mjs not found in ${process.cwd()}`);
-    console.error('Run "npx design-contract init" to create one.');
+    console.error(`Error: design-check.config.mjs not found in ${process.cwd()}`);
+    console.error('Run "npx design-check init" to create one.');
     process.exit(1);
   }
 }
