@@ -78,6 +78,8 @@ A failing test is the correct, intended output of this skill. It means the infra
 
 **Coverage over pass rate** — The metric is how many components are tested and how many Figma properties are compared, not how many tests pass. A red test suite with full coverage is better than a green suite with hidden discrepancies.
 
+**CHECKS_STRICT is always the default — no exceptions without a documented structural impossibility** — Every component gets `CHECKS_STRICT` unless a specific item in the Troubleshooting section or the exceptions table in Step 0c explicitly covers that case. "The component looks simple", "the Figma node has no shadow", or "it's probably just a layout" are NOT valid reasons to use a narrower check set. When in doubt, always go stricter.
+
 **Responsive contract cases are mandatory** — Every component that has multiple breakpoint frames in Figma MUST have a separate contract case per breakpoint. A component tested only at desktop viewport is incomplete coverage. See Step 0b-responsive and Step 3-responsive for how to detect and wire breakpoints.
 
 **Rationalization check** — If you find yourself thinking any of the following, STOP:
@@ -475,39 +477,40 @@ curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
   "
 ```
 
-**Determine checks from properties:**
+**Default check set: always start with `CHECKS_STRICT`.**
 
-| Property present in Figma node | Add to checks |
+Do NOT build the check list from a property-existence table. The correct flow is:
+
+1. **Start with `CHECKS_STRICT` for every component** — this is the mandatory default.
+2. Use the node properties above as **diagnostic context** only — they help you understand what Figma has, not decide which checks to skip.
+3. **Only remove a specific check** when a structural impossibility from the table below applies. Every other reason is invalid.
+
+| Check to REMOVE | Required condition (structural impossibility only) |
 |---|---|
-| `hasSize` (always true for visible nodes) | `'exists'`, `'size'` |
-| `hasFill` | `'background'` |
-| `hasStroke` | `'border'` |
-| `hasEffect` (shadow) | `'shadow'` |
-| `hasRadius` | `'radius'` |
-| `hasOpacity` | `'opacity'` |
-| `hasBlend` | `'blend'` |
-| `hasLayout` (auto-layout) | `'layout'` |
-| `hasTypography` or `hasText` | `'typography'` |
-| `hasOverflow` | `'overflow'` |
+| `'layout'` | Node renders as `<tr>` / table row (table layout, not flexbox — `display: table-row`) |
+| `'size'` | Component width/height is content-driven and changes with data (pagination dots, dynamic tag lists) |
+| `'typography'` | No text nodes exist anywhere in the Figma node tree |
+| `'shadow'`, `'border'`, `'background'`, `'radius'` | Only if the Figma node AND the React element BOTH structurally cannot have that property (e.g., a SVG-only node, a pure table-row). Not because "the Figma node shows `null`" — see bidirectional section below. |
+
+**When in doubt: keep the check.** A failing check reveals a real discrepancy. A removed check hides one permanently.
 
 **Map to named check sets:**
 
 ```
-All of: size + background + radius + border + shadow + opacity + layout + typography + overflow + blend
-  → CHECKS_STRICT
+Default for ALL components: CHECKS_STRICT
 
-size + background + radius + shadow + layout + overflow (no typography)
-  → CHECKS_CONTAINER
-
-size + layout only
-  → CHECKS_LAYOUT
-
-size + background + radius only
-  → CHECKS_SHAPE
-
-Anything else
-  → custom array: ['exists', 'size', 'layout', 'typography']
+Only use a narrower set when structurally required:
+  CHECKS_CONTAINER — Figma node has absolutely no text/typography children in the entire tree
+  CHECKS_LAYOUT    — table rows (<tr>) or wrapper frames confirmed to have no fills, no radius, no text
+  CHECKS_SHAPE     — purely visual shape nodes (no layout, no text, only fill/radius)
+  Custom array     — only for the specific structural exceptions documented in Troubleshooting
 ```
+
+### ⚠️ Why "Figma node has no shadow" is NOT a reason to remove `'shadow'`
+
+A Figma node with `hasEffect: false` (no shadow) is **exactly why you keep `'shadow'` in checks**. The bidirectional engine will verify that the browser element also has no shadow. If the browser unexpectedly has a shadow (from a Tailwind utility, parent inheritance, or CSS leak), the check catches it.
+
+Removing `'shadow'` because "Figma doesn't have a shadow" doesn't make the test pass more easily — it makes the test blind. Include every check type that can be structurally present on the element type, regardless of whether Figma currently has that property set.
 
 ### ⚠️ Bidirectional checks — reverse verification
 
@@ -657,6 +660,20 @@ When flattening is possible (outer wrapper exists only for relative positioning)
 ## Step 2 — Create the Storybook story file
 
 **Check first:** If a `.stories.tsx` already exists for this component, read it and check if it needs a new export (variant). If it's already correct, skip to Step 3.
+
+### Story completeness checklist (required before moving to Step 3)
+
+A story is only complete when ALL of the following are true:
+
+- [ ] **File created** in `stories/` subfolder (not next to component)
+- [ ] **`component` field declared** in meta (Rule 1)
+- [ ] **All required props supplied** in `args` — read the component's TypeScript interface and supply every non-optional prop
+- [ ] **All required providers present** in `decorators` — check component source for `useNavigate`, `useParams`, context hooks, QueryClient
+- [ ] **No external image URLs** in mock data — all avatars/images use SVG data URLs (Rule 2, Rule 6)
+- [ ] **Mock data covers visible UI** — if the component renders a list, provide at least 3 items; if it renders a card, provide all displayed fields
+- [ ] **`parameters: { layout: 'fullscreen' }`** for full-page components
+
+**Incomplete story = the design-contract test cannot run.** A story that crashes on mount, renders blank, or shows placeholder errors produces a "story failed to load" result that hides all discrepancies — worse than no test at all.
 
 **File location:** Always create story files in a dedicated `stories/` subdirectory alongside the component — never in the same directory as the component file itself.
 
@@ -903,7 +920,7 @@ When Step 0b-responsive found multiple breakpoint frames for a component, create
 { name: 'users-badge--default', storyId: 'users-badge--default', figmaNodeId: 'ONLY_NODE', figmaScale: 2, viewport: { width: 250, height: 80 } },
 ```
 
-**`checks`** — determined by Step 0c Figma node properties, not by assumption:
+**`checks`** — always `CHECKS_STRICT` unless a structural impossibility applies:
 
 | Named set | Includes |
 |---|---|
@@ -912,8 +929,19 @@ When Step 0b-responsive found multiple breakpoint frames for a component, create
 | `CHECKS_LAYOUT` | exists, size, layout |
 | `CHECKS_SHAPE` | exists, size, radius, background |
 
-Default: if the Figma node has **both** visual (fill/border/shadow/radius) **and** layout (padding/gap) properties, use `CHECKS_STRICT`.  
-Only use `CHECKS_LAYOUT` when the node has no fill, no border, and no radius set.
+**Default: `CHECKS_STRICT` for every component — no exceptions without a structural impossibility.**
+
+Do NOT choose a narrower set because:
+- ❌ "The Figma node doesn't have a shadow/border/fill" → keep the check (bidirectional: ensures browser also lacks it)
+- ❌ "The component looks simple / atomic" → CHECKS_STRICT still applies
+- ❌ "It's just a layout container" → use CHECKS_CONTAINER only if confirmed zero text in entire node tree
+- ❌ "The test might be hard to satisfy" → that's a component fix task, not a reason to reduce checks
+
+Only use a narrower set when:
+- ✅ Node is a `<tr>` table row → remove `'layout'` from CHECKS_STRICT → use custom array
+- ✅ Dynamic content-driven size → remove `'size'` only
+- ✅ Full-page root frame (no fills, no layout, confirmed in Step 0c) → `['exists','size','background','overflow']`
+- ✅ A specific case documented in the Troubleshooting section explicitly matches
 
 **`selector`:**
 - Whole story (full page): omit selector
@@ -1546,13 +1574,15 @@ viteFinal: async (config) => {
 
 ## Quick reference — naming patterns from this project
 
+**Default rule: `CHECKS_STRICT` for everything except the structural exceptions below.**
+
 | Component | storyId | figmaScale | checks | selector |
 |---|---|---|---|---|
-| Page root frame (has fills+radius+overflow, no layout) | `users-userspage--default` | 1 | `['exists','background','radius','overflow']` | `[data-testid="page-root"]` |
-| Full-screen outer container (two-level: outer=visual, inner=layout) | `feature-component--step-1` | 1 | `['exists','background','radius','overflow']` | `[data-testid="outer-container"]` |
-| Page section (with bg + layout) | `users-userspage--default` | 1 | `CHECKS_CONTAINER` | `[data-testid="section-header"]` |
-| Page section (with typography) | `users-userspage--default` | 1 | `CHECKS_STRICT` | `[data-testid="section-hero"]` + `typographySelector: 'h1'` |
-| Card header (in page) | `users-userspage--default` | 1 | `CHECKS_CONTAINER` | `[data-testid="table-card-header"]` |
+| Any standalone component (badge, input, card…) | `feature-component--default` | 2 | `CHECKS_STRICT` ← **default** | `[data-testid="component"]` |
+| Page section (with bg + layout + typography) | `users-userspage--default` | 1 | `CHECKS_STRICT` ← **default** | `[data-testid="section-hero"]` + `typographySelector: 'h1'` |
+| Page section (layout + bg only, confirmed zero text in tree) | `users-userspage--default` | 1 | `CHECKS_CONTAINER` ← only if no text | `[data-testid="section-header"]` |
+| Page root frame (no fills, no layout — confirmed in Step 0c) | `users-userspage--default` | 1 | `['exists','background','radius','overflow']` | `[data-testid="page-root"]` |
+| Full-screen outer container (two-level: outer=visual only) | `feature-component--step-1` | 1 | `['exists','background','radius','overflow']` | `[data-testid="outer-container"]` |
 | Search input (in page) | `users-userspage--default` | 2 | `CHECKS_STRICT` | `[data-testid="table-search"]` |
 | Status badge (standalone) | `users-statusbadge--active` | 2 | `CHECKS_STRICT` | _(story is the component)_ |
-| Table cell | `users-userspage--default` | 2 | `['exists','size','layout','typography']` | `#storybook-root table tbody tr:first-child td:nth-child(1)` |
+| Table cell (`<tr>`) | `users-userspage--default` | 2 | `['exists','size','background','typography']` ← remove layout (table-row) | `#storybook-root table tbody tr:first-child td:nth-child(1)` |
