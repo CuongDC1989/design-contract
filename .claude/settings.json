@@ -8,6 +8,8 @@
       "Bash(source .env*)",
       "Bash(curl -s https://api.figma.com/*)",
       "Bash(curl -s -H * https://api.figma.com/*)",
+      "Bash(curl -sL https://figma-alpha-api.s3.us-west-2.amazonaws.com/*)",
+      "Bash(curl -sL -o * https://figma-alpha-api.s3.us-west-2.amazonaws.com/*)",
       "Bash(curl -s http://127.0.0.1:*)",
       "Bash(curl -s * http://127.0.0.1:*)",
       "Bash(curl -s http://localhost:*)",
@@ -16,6 +18,10 @@
       "Bash(find . *)",
       "Bash(grep *)",
       "Bash(mkdir -p *)",
+      "Bash(npx playwright *)",
+      "Bash(node -e \"const{chromium}*)",
+      "Bash(lsof -ti:*)",
+      "Bash(kill *)",
       "Read(**)"
     ]
   }
