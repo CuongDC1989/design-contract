@@ -6,6 +6,27 @@ Generate a complete feature page — React components + Storybook stories + desi
 
 ---
 
+## MANDATORY RULE — Typography + Layout accuracy is non-negotiable
+
+> **This rule applies to every phase of this skill. It overrides any "keep it simple" instinct.**
+
+**Typography** (`fontFamily`, `fontWeight`, `fontSize`, `lineHeight`, `letterSpacing`, `textAlign`, `color`) and **layout** (`flexDirection`, `padding`, `gap`, `alignItems`, `justifyContent`) must be captured accurately from Figma and reflected in BOTH the component code AND the design contract tests.
+
+**In Phase 2 (implementation):**
+- The `frontend-developer` agent prompt MUST include the full typography spec AND full layout spec from `2a` and `2a-typography`. An agent prompt missing either will produce a component that fails design contract tests.
+- After code generation, grep the output for the expected font-size, font-weight, and gap/padding classes. Missing → fix immediately.
+
+**In Phase 3 (story + config):**
+- ANY component with visible text MUST include `'typography'` in its `contractCases[]` checks.
+- ANY component with flex/grid/auto-layout MUST include `'layout'` in its `contractCases[]` checks.
+- `CHECKS_STRICT` covers both — use it by default.
+- If the cache diagnostic returns `hasTypography: false` for a component that visually has text → STOP, do not accept it. Investigate: re-run the recursive `hasText()` walk, check for stale cache, inspect INSTANCE children.
+- `['exists', 'size']` alone is NOT a valid checks list for any component with text or spacing.
+
+**Violation is a blocker** — do not proceed to the next phase if either rule is violated.
+
+---
+
 ## Workflow overview
 
 | Phase | What happens | File to read |
@@ -43,93 +64,96 @@ Build a mental map:
 - Which already have stories?
 - Which are already wired in `design-check.config.mjs`?
 
-### 1b — Detect Figma data source
+### 1b — Bulk fetch the entire Figma file (follow figma-to-component)
 
-Before fetching anything, determine which method is available and use it for all subsequent Figma calls in this session:
+**This step replaces all piecemeal Figma API calls.** Follow the exact same 3-step bulk fetch defined in `figma-to-component`:
 
-- **Try** calling `figma___get_metadata` with the file key from `.env`
-- If it returns data → **MCP mode** for all fetches below
-- If the tool is unavailable or errors → **API mode**: use `curl` + REST API
-
-> Each fetch step below shows both `[MCP]` and `[API]` paths. Use only the one matching your mode.
-
-### 1c — Fetch Figma pages and let user choose
-
-**[MCP]** Call `figma___get_metadata` — the response contains `document.children` (pages). Extract each page's `id` and `name`, print as a numbered list.
-
-**[API]**
+**Step 1 — List files in the project (optional, if `FIGMA_PROJECT_ID` is set):**
 ```bash
-[ -f .env ] || { echo "ERROR: .env not found"; exit 1; }
+source .env
+curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
+  "https://api.figma.com/v1/projects/$FIGMA_PROJECT_ID/files" \
+  | node -e "
+    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+    (d.files || []).forEach(f => console.log(f.key + '\t' + f.name));
+  "
+```
+
+**Step 2 — Fetch complete file, no depth limit:**
+```bash
 source .env
 [ -n "$FIGMA_TOKEN" ]    || { echo "ERROR: FIGMA_TOKEN not set"; exit 1; }
 [ -n "$FIGMA_FILE_KEY" ] || { echo "ERROR: FIGMA_FILE_KEY not set"; exit 1; }
 curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY?depth=1" \
-  | node -e "
-    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-    if (d.err || d.status === 403) { console.error('Figma API error:', d.err || d.status); process.exit(1); }
-    d.document.children.forEach((p, i) => console.log((i+1) + '.', p.name, '  [' + p.id + ']'));
-  "
+  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY" \
+  > figma-nodes-cache.json
+echo "Cached: $(wc -c < figma-nodes-cache.json) bytes"
 ```
 
-This prints a numbered list, e.g.:
-```
-1. Auth   [2397-45766]
-2. Users  [2397-46387]
-3. Moderation  [2397-47352]
-```
-
-Present this list to the user and ask: **"Which page number do you want to implement?"**
-
-The user replies with a number (e.g. `2`). Read the corresponding `[ID]` from the output above. Use that ID as `PAGE_ID` in section 1d.
-
-### 1d — Fetch all nodes on the page
-
-**[MCP]** Call `figma___get_design_context` with the page node ID. The response contains the node tree — extract children up to depth 2, applying the same filtering heuristic below.
-
-**[API]**
+**Step 3 — Verify and extract all node IDs:**
 ```bash
-# Replace PAGE_ID with the chosen page ID
-source .env
-curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=PAGE_ID" \
-  | node -e "
-    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-    if (d.err || d.status === 403) { console.error('Figma API error:', d.err || d.status); process.exit(1); }
-    function walk(node, depth) {
-      if (depth > 2) return;
-      if (node.visible === false) return;
-      if ((node.opacity ?? 1) === 0) return;
-      if (/^_/.test(node.name)) return;
-      const w = node.absoluteBoundingBox?.width ?? 0;
-      const h = node.absoluteBoundingBox?.height ?? 0;
-      if (w < 4 && h < 4 && node.type !== 'COMPONENT') return;
-      console.log(' '.repeat(depth*2) + node.id + '  \"' + node.name + '\"  [' + node.type + ']');
-      (node.children || []).forEach(c => walk(c, depth+1));
+node -e "
+  const d = JSON.parse(require('fs').readFileSync('figma-nodes-cache.json','utf8'));
+  const roots = d.document ? [d.document] : Object.values(d.nodes).map(n => n.document);
+  let frames=0, components=0, text=0, total=0, maxDepth=0;
+  function walk(n, depth) {
+    total++; if(depth>maxDepth)maxDepth=depth;
+    if(n.type==='FRAME')frames++;
+    if(n.type==='COMPONENT'||n.type==='COMPONENT_SET')components++;
+    if(n.type==='TEXT')text++;
+    (n.children||[]).forEach(c=>walk(c,depth+1));
+  }
+  roots.forEach(r=>walk(r,0));
+  console.log('Total:', total, ' FRAME:', frames, ' COMPONENT/SET:', components, ' TEXT:', text, ' maxDepth:', maxDepth);
+  if(text===0) console.error('⚠ 0 text nodes — fetch may have failed');
+  else console.log('✓ Cache complete — all subsequent steps read from figma-nodes-cache.json');
+"
+```
+
+> **MCP mode:** Call `figma___get_metadata` — if it returns data, use MCP calls (`figma___get_design_context`) instead of curl for the steps below. The cache file is still written for property inspection.
+
+### 1c — List pages and let user choose
+
+**From cache:**
+```bash
+node -e "
+  const d = JSON.parse(require('fs').readFileSync('figma-nodes-cache.json','utf8'));
+  (d.document.children || []).forEach((p, i) => console.log((i+1) + '.', p.name, '  [' + p.id + ']'));
+"
+```
+
+Present the numbered list and ask: **"Which page number do you want to implement?"**
+
+### 1d — List all components/frames on the chosen page
+
+**From cache — no API call:**
+```bash
+node -e "
+  const d = JSON.parse(require('fs').readFileSync('figma-nodes-cache.json','utf8'));
+  const PAGE_NAME = 'CHOSEN_PAGE_NAME'; // replace with user's choice
+  const page = (d.document.children || []).find(p => p.name === PAGE_NAME);
+  if (!page) { console.error('Page not found'); process.exit(1); }
+  function walk(node, depth) {
+    if (node.visible === false || (node.opacity ?? 1) === 0) return;
+    if (/^_/.test(node.name)) return;
+    const w = node.absoluteBoundingBox?.width ?? 0;
+    const h = node.absoluteBoundingBox?.height ?? 0;
+    if (w < 4 && h < 4 && node.type !== 'COMPONENT') return;
+    if (['FRAME','COMPONENT','COMPONENT_SET','SECTION'].includes(node.type)) {
+      console.log(' '.repeat(depth*2) + node.id + '  \"' + node.name + '\"  [' + node.type + ']  ' + (w ? Math.round(w)+'x'+Math.round(h) : ''));
     }
-    Object.values(d.nodes).forEach(n => walk(n.document, 0));
-  "
+    (node.children || []).forEach(c => walk(c, depth + 1));
+  }
+  (page.children || []).forEach(c => walk(c, 0));
+"
 ```
 
 **Node filtering heuristic** — nodes silently skipped:
 - `visible = false` — hidden in Figma
 - `opacity = 0` — fully transparent
 - Name starts with `_` — internal/helper frame convention
-- Width < 4px AND height < 4px (decorative dots/dividers) — unless COMPONENT
-- Type is MASK — skip entirely
-- Type is BOOLEAN_OPERATION — treat as icon (map to `<img>` or icon library)
-
-**Figma API fallback strategy** — when any curl call fails:
-
-| Error | Cause | Action |
-|---|---|---|
-| `"err": "Not found"` | Wrong NODE_ID or FILE_KEY | Re-check 1b output for correct IDs |
-| `"status": 403` | Token expired or wrong | Re-run `grep FIGMA_TOKEN .env` to verify |
-| `"status": 429` | Rate limited | Wait 30s, retry: `sleep 30 && <same curl>` |
-| Empty response / timeout | Network issue | Retry up to 3×; cache: `echo "$r" > /tmp/figma_cache_NODE_ID.json` |
-| Partial data (node missing props) | Figma API inconsistency | Use cached response; fallback to `absoluteBoundingBox` for size |
-
-For repeated 429s: batch node IDs — `ids=ID1,ID2,ID3` (comma-separated, max 1000 characters).
+- Width < 4px AND height < 4px — unless COMPONENT
+- Type is MASK or BOOLEAN_OPERATION — treat as icon
 
 ### 1d — Build Component Map
 

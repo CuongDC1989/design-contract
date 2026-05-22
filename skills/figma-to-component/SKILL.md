@@ -28,6 +28,17 @@ Generate a single production-ready React component from a Figma design using mul
 
 **Responsive is mandatory, not optional** — Every component MUST support all breakpoints found in the Figma file. A component that only works at desktop width is incomplete. No component is "done" until responsive is verified at each breakpoint (Step 2d → Step 3 → Step 4 → Step 7).
 
+**Bulk fetch before any analysis** — In API mode, the very first action is ALWAYS to fetch ALL pages at depth=5 and save to `figma-nodes-cache.json`. Never fetch individual node properties from the API — read from cache. Piecemeal fetches at depth=2 or depth=4 silently miss nested components and text nodes, causing incomplete implementation.
+
+**MANDATORY: Typography and Layout must match Figma exactly — no tolerance**
+
+Typography (`fontFamily`, `fontWeight`, `fontSize`, `lineHeight`, `letterSpacing`, `textAlign`, `color`) and layout (`flexDirection`, `padding`, `gap`, `alignItems`, `justifyContent`) are non-negotiable. The generated component MUST reproduce both exactly as specified in Figma.
+
+- **Typography**: Every text node in Figma has a `style` object. Read it. Map every field (`fontSize`, `fontWeight`, `lineHeightPx`, `letterSpacing`, `textAlignHorizontal`) to Tailwind classes and verify after generation. Do not approximate (`text-sm` when Figma says 15px → use `text-[15px]`).
+- **Layout**: Every auto-layout frame has `layoutMode`, `paddingTop/Bottom/Left/Right`, `itemSpacing`, `counterAxisAlignItems`, `primaryAxisAlignItems`. Read all fields. Map all fields. If a padding value is 0, still check whether the parent or sibling in Figma has spacing that compensates.
+- **Before calling the frontend-developer agent**: verify that the prompt includes BOTH the full typography spec AND the full layout spec extracted from the cache. An agent prompt missing either of these will produce a component that fails design contract tests.
+- **After code generation**: grep the output for the expected font-size, font-weight, and gap/padding classes. If any are missing → fix before marking the step complete.
+
 ---
 
 ## Instructions
@@ -82,27 +93,64 @@ First, detect which method is available — use it for all subsequent Figma fetc
 - `figma___get_screenshot` with node ID — visual reference image (attach to agent prompt)
 - For each image node inside the component, call `figma___get_screenshot` to get the actual image URL
 
-**[API]** Use REST API:
+**[API] — Bulk fetch ALL nodes first, then read from cache:**
+
 ```bash
 source .env
-# File structure
-curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY?depth=1"
 
-# Node properties (includes imageRef hashes for image-fill nodes)
+# Step A — List all files in the project (requires FIGMA_PROJECT_ID in .env)
 curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=NODE_ID"
+  "https://api.figma.com/v1/projects/$FIGMA_PROJECT_ID/files" \
+  | node -e "
+    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+    (d.files || []).forEach(f => console.log(f.key + '\t' + f.name));
+  "
+# Confirm FIGMA_FILE_KEY matches the target file from the list above
 
-# Screenshot of the whole component (use as visual reference)
+# Step B — Fetch complete file JSON (no depth limit)
+curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
+  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY" \
+  > figma-nodes-cache.json
+echo "Cached: $(wc -c < figma-nodes-cache.json) bytes"
+
+# Step C — Extract and verify all node IDs
+node -e "
+  const d = JSON.parse(require('fs').readFileSync('figma-nodes-cache.json','utf8'));
+  const roots = d.document ? [d.document] : Object.values(d.nodes).map(n => n.document);
+  let frames=0, text=0, total=0;
+  function walk(n) { total++; if(n.type==='FRAME')frames++; if(n.type==='TEXT')text++; (n.children||[]).forEach(walk); }
+  roots.forEach(walk);
+  console.log('Total nodes:', total, ' FRAME:', frames, ' TEXT:', text);
+  if(text===0) console.error('⚠ 0 text nodes — fetch may have failed');
+  else console.log('✓ Cache complete');
+"
+
+# Step C: Walk cache to find target component node (replace ComponentName)
+node -e "
+  const d = JSON.parse(require('fs').readFileSync('figma-nodes-cache.json','utf8'));
+  function walk(n, page) {
+    const w = n.absoluteBoundingBox?.width;
+    if (n.name.toLowerCase().includes('SEARCH_TERM')) {
+      console.log(page, n.id, n.name, '['+n.type+']', w ? w+'px' : '');
+    }
+    (n.children||[]).forEach(c => walk(c, page));
+  }
+  // /files/:key format: d.document.children = pages
+  (d.document.children||[]).forEach(page => (page.children||[]).forEach(c => walk(c, page.name)));
+" 2>&1 | head -30
+# Replace SEARCH_TERM with a keyword from the component name
+
+# Step D: Screenshot of the target node (use as visual reference)
 curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
   "https://api.figma.com/v1/images/$FIGMA_FILE_KEY?ids=NODE_ID&format=png&scale=2"
 
-# Export individual image nodes (for mock data)
-# Replace NODE_IDs with comma-separated IDs of image nodes inside the component
+# Step E: Export individual image nodes (for mock data)
 curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
   "https://api.figma.com/v1/images/$FIGMA_FILE_KEY?ids=NODE_ID1,NODE_ID2&format=png&scale=2"
 # Returns: { "images": { "NODE_ID1": "https://...", "NODE_ID2": "https://..." } }
 ```
+
+**⚠️ Never fetch individual node properties from the API after Step B.** Read from `figma-nodes-cache.json` for all subsequent steps. If a node is not in the cache, re-run Step B with depth=8.
 
 **Image node detection:** When traversing the Figma node tree, identify nodes where:
 - `type === "RECTANGLE"` and `fills[].type === "IMAGE"` — these are image placeholders
@@ -123,19 +171,20 @@ figma___get_design_context(nodeId: PAGE_ID)
 → Look at children frames — names like "Desktop", "Mobile", "Tablet", "1440", "768", "375"
 ```
 
-**[API]** Fetch page children:
+**[API]** Read from cache (no new API call):
 ```bash
-source .env
-curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=PAGE_ID&depth=2" \
-  | node -e "
-    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-    const page = Object.values(d.nodes)[0].document;
+# List all top-level frames across all pages with their widths
+node -e "
+  const d = JSON.parse(require('fs').readFileSync('figma-nodes-cache.json','utf8'));
+  // /files/:key format: d.document.children = pages
+  (d.document.children || []).forEach(page => {
+    console.log('=== PAGE:', page.name);
     (page.children || []).forEach(f => {
       const w = f.absoluteBoundingBox?.width;
-      console.log(f.id, '\t', f.name, '\t', w ? w+'px' : '?');
+      console.log(f.id, '\t', f.name, '\t['+f.type+']\t', w ? w+'px' : '?');
     });
-  "
+  });
+"
 ```
 
 **Breakpoint detection rules:**

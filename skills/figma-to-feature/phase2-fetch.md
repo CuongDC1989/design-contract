@@ -6,6 +6,25 @@ Covers Phase 2 sections 2a–2g: fetching Figma node properties, mapping values 
 
 ---
 
+## MANDATORY: Typography + Layout — Read and verify both before writing any code
+
+Before fetching anything in Phase 2, affirm the following rule:
+
+**Typography fields to extract from every component (section 2a-typography):**
+`fontSize`, `fontWeight`, `lineHeightPx`, `lineHeightUnit`, `letterSpacing`, `textAlignHorizontal`
+
+**Layout fields to extract from every component (section 2a):**
+`layoutMode`, `paddingTop`, `paddingBottom`, `paddingLeft`, `paddingRight`, `itemSpacing`, `counterAxisAlignItems`, `primaryAxisAlignItems`, `primaryAxisSizingMode`, `counterAxisSizingMode`
+
+**Gate — do not spawn the frontend-developer agent (step 2e) unless:**
+1. Typography data is present in the prompt (if component has any text). If `hasTypography: false` → investigate before continuing.
+2. Layout data (padding, gap, flex direction) is present in the prompt if component has auto-layout.
+3. Both are explicitly listed in the "Figma data" section of the agent prompt.
+
+A missing typography or layout spec in the agent prompt will produce code that fails design contract tests. Verify before spawning.
+
+---
+
 ## Phase 2 — Component Implementation (2a–2g)
 
 > **Figma source mode** was detected in Phase 1 (step 1b). Use the same mode (`[MCP]` or `[API]`) for every fetch in this phase — do not mix.
@@ -14,62 +33,71 @@ For each component in the confirmed map (skip any marked `skip`):
 
 ### 2a — Fetch detailed Figma node properties
 
-**[MCP]** Call `figma___get_design_context` with the node ID. Extract from the response: `absoluteBoundingBox`, `layoutMode`, `padding*`, `itemSpacing`, `counterAxisAlignItems`, `primaryAxisAlignItems`, `cornerRadius`, `fills`, `effects`, `strokes`, `clipsContent`, `opacity`, `primaryAxisSizingMode`, `counterAxisSizingMode`, `minWidth/maxWidth/minHeight/maxHeight`, `layoutPositioning`, `relativeTransform`, `layoutWrap`. Build the same `out` object as the API path below.
+> **Cache-first:** Phase 1 already wrote `figma-nodes-cache.json`. Read from it — no API call needed. If the cache is missing, re-run Phase 1 step 1b.
 
-**[API]**
+**[MCP]** Call `figma___get_design_context` with the node ID. Extract from the response: `absoluteBoundingBox`, `layoutMode`, `padding*`, `itemSpacing`, `counterAxisAlignItems`, `primaryAxisAlignItems`, `cornerRadius`, `fills`, `effects`, `strokes`, `clipsContent`, `opacity`, `primaryAxisSizingMode`, `counterAxisSizingMode`, `minWidth/maxWidth/minHeight/maxHeight`, `layoutPositioning`, `relativeTransform`, `layoutWrap`. Build the same `out` object as the cache path below.
+
+**[Cache — default]**
 ```bash
-# Replace NODE_ID with the component's figmaNodeId
-source .env
-curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=NODE_ID" \
-  | node -e "
-    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-    if (d.err || d.status === 403) { console.error('Figma API error:', d.err || d.status); process.exit(1); }
-    const node = Object.values(d.nodes)[0].document;
-    const out = {
-      name:           node.name,
-      type:           node.type,
-      width:          node.absoluteBoundingBox?.width,
-      height:         node.absoluteBoundingBox?.height,
-      layoutMode:     node.layoutMode,
-      paddingTop:     node.paddingTop,
-      paddingBottom:  node.paddingBottom,
-      paddingLeft:    node.paddingLeft,
-      paddingRight:   node.paddingRight,
-      itemSpacing:    node.itemSpacing,
-      alignItems:     node.counterAxisAlignItems,
-      justifyContent: node.primaryAxisAlignItems,
-      cornerRadius:   node.cornerRadius,
-      fills:          (node.fills||[]).filter(f=>f.visible!==false),
-      effects:        (node.effects||[]).filter(e=>e.visible!==false),
-      strokes:        node.strokes,
-      clipsContent:   node.clipsContent,
-      opacity:        node.opacity,
-      constraints:    node.constraints,
-      primaryAxisSizingMode: node.primaryAxisSizingMode,
-      counterAxisSizingMode: node.counterAxisSizingMode,
-      minWidth:    node.minWidth,
-      maxWidth:    node.maxWidth,
-      minHeight:   node.minHeight,
-      maxHeight:   node.maxHeight,
-      hasVariables: !!(node.fills||[]).find(f=>f.boundVariables?.color) ||
-                    !!(node.strokes||[]).find(s=>s.boundVariables?.color),
-      layoutPositioning: node.layoutPositioning,
-      relativePosition: node.relativeTransform
-        ? { x: node.relativeTransform[0][2], y: node.relativeTransform[1][2] }
-        : null,
-      layoutWrap:  node.layoutWrap,
-      zIndexHint:  null,
-      shadowDetails: (node.effects||[])
-        .filter(e=>e.type==='DROP_SHADOW'&&e.visible!==false)
-        .map(e=>({
-          x:e.offset?.x, y:e.offset?.y, blur:e.radius, spread:e.spread,
-          color:e.color ? `rgba(${Math.round(e.color.r*255)},${Math.round(e.color.g*255)},${Math.round(e.color.b*255)},${(e.color.a??1).toFixed(2)})` : null
-        })),
-    };
-    console.log(JSON.stringify(out, null, 2));
-  "
+# Replace NODE_ID with the component's figmaNodeId (use colon form: 2397:45790)
+node -e "
+  const cache = JSON.parse(require('fs').readFileSync('figma-nodes-cache.json','utf8'));
+  const root = cache.document || Object.values(cache.nodes || {})[0]?.document;
+  function findNode(n, id) {
+    if (!n) return null;
+    if (n.id === id) return n;
+    for (const c of (n.children||[])) { const r = findNode(c, id); if (r) return r; }
+    return null;
+  }
+  const TARGET_ID = 'NODE_ID';  // replace with actual ID (colon form)
+  const node = findNode(root, TARGET_ID);
+  if (!node) { console.error('Node not found in cache. Check ID format — cache uses colon form e.g. 2397:45790'); process.exit(1); }
+  const out = {
+    name:           node.name,
+    type:           node.type,
+    width:          node.absoluteBoundingBox?.width,
+    height:         node.absoluteBoundingBox?.height,
+    layoutMode:     node.layoutMode,
+    paddingTop:     node.paddingTop,
+    paddingBottom:  node.paddingBottom,
+    paddingLeft:    node.paddingLeft,
+    paddingRight:   node.paddingRight,
+    itemSpacing:    node.itemSpacing,
+    alignItems:     node.counterAxisAlignItems,
+    justifyContent: node.primaryAxisAlignItems,
+    cornerRadius:   node.cornerRadius,
+    fills:          (node.fills||[]).filter(f=>f.visible!==false),
+    effects:        (node.effects||[]).filter(e=>e.visible!==false),
+    strokes:        node.strokes,
+    clipsContent:   node.clipsContent,
+    opacity:        node.opacity,
+    constraints:    node.constraints,
+    primaryAxisSizingMode: node.primaryAxisSizingMode,
+    counterAxisSizingMode: node.counterAxisSizingMode,
+    minWidth:    node.minWidth,
+    maxWidth:    node.maxWidth,
+    minHeight:   node.minHeight,
+    maxHeight:   node.maxHeight,
+    hasVariables: !!(node.fills||[]).find(f=>f.boundVariables?.color) ||
+                  !!(node.strokes||[]).find(s=>s.boundVariables?.color),
+    layoutPositioning: node.layoutPositioning,
+    relativePosition: node.relativeTransform
+      ? { x: node.relativeTransform[0][2], y: node.relativeTransform[1][2] }
+      : null,
+    layoutWrap:  node.layoutWrap,
+    zIndexHint:  null,
+    shadowDetails: (node.effects||[])
+      .filter(e=>e.type==='DROP_SHADOW'&&e.visible!==false)
+      .map(e=>({
+        x:e.offset?.x, y:e.offset?.y, blur:e.radius, spread:e.spread,
+        color:e.color ? \`rgba(\${Math.round(e.color.r*255)},\${Math.round(e.color.g*255)},\${Math.round(e.color.b*255)},\${(e.color.a??1).toFixed(2)})\` : null
+      })),
+  };
+  console.log(JSON.stringify(out, null, 2));
+"
 ```
+
+> **ID format note:** The cache stores node IDs with colons (`2397:45790`). The config files and URLs use hyphens (`2397-45790`). Convert when needed: `id.replace(/-/g, ':')` → cache lookup; `id.replace(/:/g, '-')` → config.
 
 ### 2a-typography — Fetch TEXT node properties
 
@@ -77,35 +105,41 @@ For components that contain text, fetch typography from the first TEXT child.
 
 **[MCP]** The `figma___get_design_context` response from 2a already contains the full node tree — traverse children to find the first node with `type === 'TEXT'` and read its `style` object: `fontSize`, `fontWeight`, `lineHeightPx`, `lineHeightUnit`, `letterSpacing`, `textAlignHorizontal`.
 
-**[API]**
+**[Cache — default]**
 ```bash
-source .env
-curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=NODE_ID" \
-  | node -e "
-    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-    if (d.err || d.status === 403) { console.error('Figma API error:', d.err || d.status); process.exit(1); }
-    const node = Object.values(d.nodes)[0].document;
-    function findText(n) {
-      if (n.type === 'TEXT') return n;
-      for (const c of (n.children || [])) { const found = findText(c); if (found) return found; }
-      return null;
-    }
-    const textNode = findText(node);
-    if (textNode) {
-      const s = textNode.style || {};
-      console.log(JSON.stringify({
-        fontSize:       s.fontSize,
-        fontWeight:     s.fontWeight,
-        lineHeight:     s.lineHeightPx,
-        lineHeightUnit: s.lineHeightUnit,
-        letterSpacing:  s.letterSpacing,
-        textAlign:      s.textAlignHorizontal,
-      }, null, 2));
-    } else {
-      console.log('(no TEXT child found)');
-    }
-  "
+# Replace NODE_ID with the component's figmaNodeId (colon form)
+node -e "
+  const cache = JSON.parse(require('fs').readFileSync('figma-nodes-cache.json','utf8'));
+  const root = cache.document || Object.values(cache.nodes || {})[0]?.document;
+  function findNode(n, id) {
+    if (!n) return null;
+    if (n.id === id) return n;
+    for (const c of (n.children||[])) { const r = findNode(c, id); if (r) return r; }
+    return null;
+  }
+  function findText(n) {
+    if (n.type === 'TEXT') return n;
+    for (const c of (n.children || [])) { const found = findText(c); if (found) return found; }
+    return null;
+  }
+  const TARGET_ID = 'NODE_ID';  // replace with actual ID
+  const node = findNode(root, TARGET_ID);
+  if (!node) { console.error('Node not found in cache'); process.exit(1); }
+  const textNode = findText(node);
+  if (textNode) {
+    const s = textNode.style || {};
+    console.log(JSON.stringify({
+      fontSize:       s.fontSize,
+      fontWeight:     s.fontWeight,
+      lineHeight:     s.lineHeightPx,
+      lineHeightUnit: s.lineHeightUnit,
+      letterSpacing:  s.letterSpacing,
+      textAlign:      s.textAlignHorizontal,
+    }, null, 2));
+  } else {
+    console.log('(no TEXT child found — typography check will be skipped by engine)');
+  }
+"
 ```
 
 ### 2a-colors — Match fill color to design token

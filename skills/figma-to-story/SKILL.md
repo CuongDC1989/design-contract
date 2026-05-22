@@ -82,6 +82,37 @@ A failing test is the correct, intended output of this skill. It means the infra
 
 **Responsive contract cases are mandatory** — Every component that has multiple breakpoint frames in Figma MUST have a separate contract case per breakpoint. A component tested only at desktop viewport is incomplete coverage. See Step 0b-responsive and Step 3-responsive for how to detect and wire breakpoints.
 
+**MANDATORY: Typography and Layout must be checked accurately — no exceptions**
+
+Typography (`fontFamily`, `fontWeight`, `fontSize`, `lineHeight`, `letterSpacing`, `textAlign`, `color`) and layout (`flexDirection`, `padding`, `gap`, `alignItems`, `justifyContent`) are the two most important CSS properties in the design contract. **Both are required checks whenever the component or any of its children carry text or spacing.**
+
+**Typography rule — apply before writing any contractCase:**
+
+- ANY component with visible text in the Figma subtree MUST include `'typography'` in its checks.
+- If the diagnostic script returns `hasTypography: false` for a component that visually has text → **STOP. Do not accept it.** Investigate:
+  - Did the recursive `hasText()` walk actually traverse the full subtree? Run it explicitly on the raw cache node.
+  - Is the cache stale? Text nodes may have been added after the last fetch. Re-run the bulk fetch.
+  - Is the text inside a nested child component (INSTANCE)? Navigate into the instance's `children` in the cache.
+  - Use `typographySelector` in `contractCases[]` to pin the check to the correct text element.
+- `hasTypography: false` on a component with visible text is a data problem, not a reason to drop the check.
+
+**Layout rule — apply before writing any contractCase:**
+
+- ANY component with padding, gap, flex direction, or grid arrangement MUST include `'layout'` in its checks.
+- `['exists', 'size']` verifies only dimensions — it does NOT test spacing. Never substitute it for a component that has layout.
+- If `hasLayout: false` but the component visibly has auto-layout → check `layoutMode` directly in the cache node. Older Figma auto-layout versions use a different property name — inspect and confirm.
+
+**Violation check — mandatory before finalizing any contractCase:**
+
+| Component has… | checks must include… | If missing → |
+|---|---|---|
+| Visible text (direct or in subtree) | `'typography'` | Add it, or document structural impossibility |
+| Flex/grid/auto-layout | `'layout'` | Add it, or document structural impossibility |
+| Both | Both | Required — CHECKS_STRICT covers this by default |
+
+The only valid reason to omit `'typography'`: the Figma node and ALL its descendants are structurally incapable of containing text (e.g., a pure icon node, a divider line, an image-only frame).
+The only valid reason to omit `'layout'`: the component uses absolute/fixed positioning with no flex/grid container at any level.
+
 **Rationalization check** — If you find yourself thinking any of the following, STOP:
 
 | Thought | Reality |
@@ -333,27 +364,138 @@ Build a mental map:
 
 ---
 
-## Step 0b — Fetch Figma node tree (auto node ID discovery)
+## Step 0-FETCH — Bulk fetch all Figma data (mandatory, runs once)
 
-Use `FIGMA_TOKEN` and `FIGMA_FILE_KEY` from `.env` to browse the Figma file and resolve node IDs automatically — no manual copy-paste needed.
+**This step runs ONCE before Steps 0b, 0c, or any per-component work.** All subsequent discovery, property inspection, and typography checks read from the local cache — no additional API calls needed.
 
-### 0b-responsive — Detect breakpoint frames per component
+### Why bulk fetch first?
 
-**Before resolving individual node IDs, scan for responsive variants.** Designers typically create separate frames per breakpoint, either as sibling frames or as named variants inside the same component.
+Piecemeal per-component fetches at fixed depth silently miss nodes. The correct approach fetches everything from the project level down, in 3 steps.
+
+---
+
+### Step F1 — List all files in the project
+
+`GET /v1/projects/:project_id/files` returns every file key in the project. Use `FIGMA_PROJECT_ID` from `.env` (or ask the user to provide it).
 
 ```bash
 source .env
-# List all top-level frames on the page — look for width differences or naming patterns
 curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=PAGE_ID&depth=2" \
+  "https://api.figma.com/v1/projects/$FIGMA_PROJECT_ID/files" \
   | node -e "
     const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-    const page = Object.values(d.nodes)[0].document;
+    (d.files || []).forEach(f => console.log(f.key + '\t' + f.name));
+  "
+```
+
+Note which file key corresponds to the design file being worked on. If `FIGMA_FILE_KEY` is already set in `.env`, confirm it matches one of the keys returned here.
+
+---
+
+### Step F2 — Fetch the complete file JSON
+
+`GET /v1/files/:file_key` returns the **entire document tree** with no depth limit. The root is a `DOCUMENT` node; children are `CANVAS` (page) nodes; each page contains all layers recursively.
+
+```bash
+source .env
+# Full file fetch — no depth param, no nodes missed
+curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
+  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY" \
+  > figma-nodes-cache.json
+echo "Cached: $(wc -c < figma-nodes-cache.json) bytes"
+```
+
+**If the file is very large (>50 MB):** Fetch page by page using `GET /v1/files/:key/nodes?ids=PAGE_ID` (no depth param = full subtree for that page). Merge into one file:
+
+```bash
+source .env
+# Get page IDs first
+curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
+  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY" \
+  | node -e "
+    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+    d.document.children.forEach(p => console.log(p.id + '\t' + p.name));
+  "
+
+# Then fetch each page individually and merge
+# Replace PAGE_ID1,PAGE_ID2,... with IDs above
+curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
+  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=PAGE_ID1,PAGE_ID2" \
+  > figma-nodes-cache.json
+# Note: this format uses d.nodes[id].document instead of d.document
+```
+
+---
+
+### Step F3 — Extract and verify all node IDs
+
+Recursively traverse the JSON to collect every node `id`. The result is the complete inventory of the file.
+
+```bash
+node -e "
+  const raw = require('fs').readFileSync('figma-nodes-cache.json','utf8');
+  const d = JSON.parse(raw);
+
+  // Support both /files/:key (d.document) and /files/:key/nodes (d.nodes)
+  const roots = d.document
+    ? [d.document]
+    : Object.values(d.nodes).map(n => n.document);
+
+  let frames=0, components=0, textNodes=0, maxDepth=0;
+  const allIds = [];
+
+  function walk(n, depth) {
+    allIds.push(n.id);
+    if (depth > maxDepth) maxDepth = depth;
+    if (n.type === 'FRAME') frames++;
+    if (n.type === 'COMPONENT' || n.type === 'COMPONENT_SET') components++;
+    if (n.type === 'TEXT') textNodes++;
+    (n.children || []).forEach(c => walk(c, depth + 1));
+  }
+  roots.forEach(r => walk(r, 0));
+
+  console.log('Total nodes:', allIds.length);
+  console.log('FRAME:', frames, ' COMPONENT/SET:', components, ' TEXT:', textNodes, ' maxDepth:', maxDepth);
+  if (textNodes === 0) console.error('⚠ 0 text nodes — fetch may have failed or file has no text');
+  else console.log('✓ Cache complete');
+"
+```
+
+---
+
+### ⚠️ Cache is the single source of truth
+
+After Step F3 passes, **never** make a fresh Figma API call for discovery or property inspection. All Steps 0b, 0b-responsive, 0c reads MUST come from `figma-nodes-cache.json`.
+
+The cache goes stale only when the Figma file changes. Re-run from Step F1 after any design update.
+
+### Node ID format note
+
+Node IDs in the REST API use **colons** (e.g., `1:3`). Config files and URLs use **hyphens** (e.g., `1-3`). When searching the cache: `id.replace(/-/g, ':')`. When writing to config: use hyphens.
+
+---
+
+## Step 0b — Fetch Figma node tree (auto node ID discovery)
+
+**Read from `figma-nodes-cache.json` — do NOT make a new API call.**
+
+### 0b-responsive — Detect ALL frames and breakpoints from cache
+
+**Read from `figma-nodes-cache.json`. No API call.**
+
+```bash
+# List ALL top-level frames across ALL pages — includes width for breakpoint detection
+node -e "
+  const d = JSON.parse(require('fs').readFileSync('figma-nodes-cache.json','utf8'));
+  // /files/:key format: d.document.children = pages
+  (d.document.children || []).forEach(page => {
+    console.log('=== PAGE:', page.name, '===');
     (page.children || []).forEach(f => {
       const w = f.absoluteBoundingBox?.width;
-      console.log(f.id + '\t' + f.name + '\t' + (w ? w + 'px' : '?'));
+      console.log(f.id + '\t' + f.name + '\t[' + f.type + ']\t' + (w ? w + 'px' : '?'));
     });
-  "
+  });
+"
 ```
 
 **Breakpoint identification rules:**
@@ -383,51 +525,26 @@ If only ONE frame exists for a component, note it and use its width as the singl
 
 ---
 
-**1. Get pages in the file:**
+**Full node walk from cache (all COMPONENT/FRAME nodes across entire file):**
 
 ```bash
-curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY?depth=1" \
-  | node -e "
-    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-    d.document.children.forEach(p => console.log(p.id, p.name));
-  "
-```
-
-**2. Get top-level frames on a page** (replace `PAGE_ID` with the ID from step 1) — use `depth=4` to catch nested components:
-
-```bash
-curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=PAGE_ID&depth=4" \
-  | node -e "
-    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-    const page = Object.values(d.nodes)[0].document;
-    function walk(node, depth) {
-      if (['COMPONENT', 'COMPONENT_SET', 'FRAME'].includes(node.type)) {
-        console.log(' '.repeat(depth*2) + node.id + '  ' + node.name + '  [' + node.type + ']');
-      }
-      (node.children || []).forEach(c => walk(c, depth+1));
+node -e "
+  const d = JSON.parse(require('fs').readFileSync('figma-nodes-cache.json','utf8'));
+  function walk(node, pageName) {
+    if (['COMPONENT', 'COMPONENT_SET', 'FRAME'].includes(node.type)) {
+      const w = node.absoluteBoundingBox?.width;
+      console.log(pageName + '\t' + node.id + '\t' + node.name + '\t[' + node.type + ']\t' + (w ? w+'px' : '?'));
     }
-    page.children.forEach(n => walk(n, 0));
-  "
+    (node.children || []).forEach(c => walk(c, pageName));
+  }
+  // /files/:key format: d.document.children = pages (CANVAS nodes)
+  (d.document.children || []).forEach(page => {
+    (page.children || []).forEach(child => walk(child, page.name));
+  });
+"
 ```
 
-**3. Deep recursive walk of a specific frame** (replace `FRAME_ID` — use when components are nested 3+ levels deep):
-
-```bash
-curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=FRAME_ID&depth=5" \
-  | node -e "
-    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-    function walk(node, depth) {
-      console.log(' '.repeat(depth*2) + node.id + '  ' + node.name + '  [' + node.type + ']');
-      (node.children || []).forEach(c => walk(c, depth+1));
-    }
-    Object.values(d.nodes).forEach(n => walk(n.document, 0));
-  "
-```
-
-**If a component cannot be found after depth=5:** Fetch the file root with `depth=1` to list all pages, then repeat step 2 for each page. Components may live on a different page than expected.
+**If a component cannot be found in cache:** The file may have been partially fetched. Re-run Step F1 with `GET /v1/files/:key` (no params). The full-file endpoint has no depth limit.
 
 **Matching strategy:**
 - Compare Figma frame/component names to React component names (case-insensitive, ignore spaces/dashes)
@@ -447,23 +564,28 @@ LoginPage      →  (no match found)      —             needs manual input
 
 ## Step 0c — Fetch Figma node properties to determine checks
 
-**This is mandatory** — fetch the actual Figma node data before choosing `checks`. Do not guess based on component type alone.
+**This is mandatory** — inspect the actual Figma node data before choosing `checks`. **Read from `figma-nodes-cache.json` — no API call.**
 
 ```bash
-# Replace NODE_ID with the target figmaNodeId (use comma-separated for multiple)
-curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=NODE_ID" \
-  | node -e "
-    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-    const node = Object.values(d.nodes)[0].document;
-    // Walk the ENTIRE subtree — not just root — to detect text children
-    function firstTextNode(n) {
-      if (n.type === 'TEXT') return n;
-      for (const c of n.children ?? []) { const f = firstTextNode(c); if (f) return f; }
-      return null;
-    }
-    const textNode = firstTextNode(node);
-    const props = {
+# Replace XXXX-YYYY with the target figmaNodeId (hyphen format, e.g. 2397-46387)
+node -e "
+  const cache = JSON.parse(require('fs').readFileSync('figma-nodes-cache.json','utf8'));
+  const TARGET_ID = 'XXXX-YYYY'.replace(/-/g, ':');
+  function findNode(n, id) {
+    if (n.id === id) return n;
+    for (const c of n.children || []) { const f = findNode(c, id); if (f) return f; }
+    return null;
+  }
+  // /files/:key format: d.document is the root DOCUMENT node
+  let node = findNode(cache.document, TARGET_ID);
+  if (!node) { console.error('NOT FOUND — re-run Step F1: GET /v1/files/:key (full-file fetch, no depth limit)'); process.exit(1); }
+  function firstTextNode(n) {
+    if (n.type === 'TEXT') return n;
+    for (const c of n.children ?? []) { const f = firstTextNode(c); if (f) return f; }
+    return null;
+  }
+  const textNode = firstTextNode(node);
+  const props = {
       hasFill:       (node.fills || []).some(f => f.type !== 'IMAGE' && f.opacity !== 0),
       hasStroke:     (node.strokes || []).length > 0,
       hasEffect:     (node.effects || []).some(e => e.type === 'DROP_SHADOW' || e.type === 'INNER_SHADOW'),
@@ -473,9 +595,9 @@ curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
       hasLayout:     node.layoutMode != null,
       hasPadding:    node.paddingLeft > 0 || node.paddingTop > 0,
       hasGap:        node.itemSpacing > 0,
-      hasText:       !!textNode,           // walks ENTIRE tree — true if any TEXT descendant exists
-      firstTextContent: textNode?.characters ?? null,  // preview which text will be checked
-      hasTypography: !!textNode?.style,    // true if first text descendant has style data
+      hasText:       !!textNode,
+      firstTextContent: textNode?.characters ?? null,
+      hasTypography: !!textNode?.style,
       hasOverflow:   node.clipsContent === true,
       hasSize:       node.absoluteBoundingBox != null,
       name:          node.name,
@@ -498,9 +620,9 @@ If the script above prints `hasText: false` (no TEXT node anywhere in the subtre
 
 | Situation | Fix |
 |---|---|
-| Component has text but it's inside a nested COMPONENT instance (API returns truncated data) | Fetch the component instance node directly with its own node ID; use that as `figmaNodeId` for a separate typography contract case |
+| Component has text but it's inside a nested COMPONENT instance | Find the instance node ID in `figma-nodes-cache.json` using the walk script; use that as `figmaNodeId` for a separate typography contract case |
 | Component genuinely has no text (icon-only, shape) | Remove `'typography'` and `'text'` from checks — this is a valid structural exception |
-| Page/section frame — text is deep in children | Use `depth=5` fetch (Step 0b command 3) to ensure text nodes are returned in API response |
+| Page/section frame — `hasText: false` despite visible text | Re-run Step F1 on that specific frame node to measure its actual depth, then re-fetch at that depth |
 
 **Default check set: always start with `CHECKS_STRICT`.**
 

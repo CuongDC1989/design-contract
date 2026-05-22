@@ -106,49 +106,70 @@ A red test result after Phase 3 = the infrastructure is doing its job. Do not to
 
 ---
 
+## MANDATORY: Typography + Layout must be in every contractCase that has text or spacing
+
+Before writing any `contractCases[]` entry, apply this checklist:
+
+| Does the component… | Required check | Violation if missing |
+|---|---|---|
+| Have visible text (in self or any descendant) | `'typography'` | YES — blocker |
+| Have flex/grid/auto-layout, padding, or gap | `'layout'` | YES — blocker |
+| Have both | Both (covered by `CHECKS_STRICT`) | YES — use `CHECKS_STRICT` |
+
+**If `hasTypography: false` but the component visually has text:**
+1. Re-run the recursive `hasText()` walk manually on the raw cache node.
+2. Check whether the text is inside an INSTANCE node — navigate into its `children` in the cache.
+3. If the cache is stale (fetch was before text was added to Figma), re-run the Phase 1 bulk fetch.
+4. Use `typographySelector` in the config entry to pin the check to the right text element.
+5. Only after exhausting the above may you document "no text found" and omit `typography`.
+
+**If `hasLayout: false` but the component visually has spacing:**
+1. Inspect `layoutMode` directly in the raw cache node — some Figma versions use different field names.
+2. Check parent frame — the layout may be on the wrapper, not the component itself.
+3. If confirmed absent in Figma data, document it; otherwise add `'layout'`.
+
+**`['exists', 'size']` alone is never a valid checks list** for any component with text or spacing. It verifies only pixel dimensions — not CSS.
+
+---
+
 ## Phase 3 — Story + Test Config
 
-### 3a — Determine checks (fetch Figma node props — mandatory)
+### 3a — Determine checks (read from cache — mandatory)
+
+> **Cache-first:** Phase 1 already wrote `figma-nodes-cache.json`. Read from it — no API call needed.
 
 ```bash
-source .env
-curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=NODE_ID" \
-  | node -e "
-    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-    if (d.err || d.status === 403) { console.error('Figma API error:', d.err || d.status); process.exit(1); }
-    const node = Object.values(d.nodes)[0].document;
-    const props = {
-      hasFill:       (node.fills || []).some(f => f.type !== 'IMAGE' && f.opacity !== 0 && f.visible !== false),
-      hasStroke:     (node.strokes || []).some(s => s.visible !== false),
-      hasEffect:     (node.effects || []).some(e => (e.type === 'DROP_SHADOW' || e.type === 'INNER_SHADOW') && e.visible !== false),
-      hasRadius:     (node.cornerRadius > 0) || (node.rectangleCornerRadii || []).some(r => r > 0),
-      hasOpacity:    node.opacity != null && node.opacity !== 1,
-      hasLayout:     node.layoutMode != null && node.layoutMode !== 'NONE',
-      hasTypography: (function hasText(n) {
-        if (n.type === 'TEXT') return true;
-        return (n.children || []).some(hasText);
-      })(node),
-      hasOverflow:   node.clipsContent === true,
-      hasSize:       node.absoluteBoundingBox != null,
-    };
-    console.log(JSON.stringify(props, null, 2));
-  "
+# Replace NODE_ID with the component's figmaNodeId (colon form: 2397:45790)
+node -e "
+  const cache = JSON.parse(require('fs').readFileSync('figma-nodes-cache.json','utf8'));
+  const root = cache.document || Object.values(cache.nodes || {})[0]?.document;
+  function findNode(n, id) {
+    if (!n) return null;
+    if (n.id === id) return n;
+    for (const c of (n.children||[])) { const r = findNode(c, id); if (r) return r; }
+    return null;
+  }
+  function hasText(n) {
+    if (n.type === 'TEXT') return true;
+    return (n.children || []).some(hasText);
+  }
+  const TARGET_ID = 'NODE_ID';  // replace with actual ID
+  const node = findNode(root, TARGET_ID);
+  if (!node) { console.error('Node not found in cache'); process.exit(1); }
+  const props = {
+    hasFill:       (node.fills || []).some(f => f.type !== 'IMAGE' && f.opacity !== 0 && f.visible !== false),
+    hasStroke:     (node.strokes || []).some(s => s.visible !== false),
+    hasEffect:     (node.effects || []).some(e => (e.type === 'DROP_SHADOW' || e.type === 'INNER_SHADOW') && e.visible !== false),
+    hasRadius:     (node.cornerRadius > 0) || (node.rectangleCornerRadii || []).some(r => r > 0),
+    hasOpacity:    node.opacity != null && node.opacity !== 1,
+    hasLayout:     node.layoutMode != null && node.layoutMode !== 'NONE',
+    hasTypography: hasText(node),
+    hasOverflow:   node.clipsContent === true,
+    hasSize:       node.absoluteBoundingBox != null,
+  };
+  console.log(JSON.stringify(props, null, 2));
+"
 ```
-
-Map properties → checks:
-
-| Figma property true | Add check |
-|---|---|
-| `hasSize` (always true for visible nodes) | `'exists'`, `'size'` |
-| `hasFill` | `'background'` |
-| `hasStroke` | `'border'` |
-| `hasEffect` | `'shadow'` |
-| `hasRadius` | `'radius'` |
-| `hasOpacity` | `'opacity'` |
-| `hasLayout` | `'layout'` |
-| `hasTypography` | `'typography'` |
-| `hasOverflow` | `'overflow'` |
 
 Named check sets (import from `@solashi2026/design_check`):
 
@@ -161,7 +182,18 @@ import { CHECKS_STRICT, CHECKS_CONTAINER, CHECKS_LAYOUT, CHECKS_SHAPE, CHECKS_RO
 // CHECKS_ROW       = ['exists','size','layout']
 ```
 
-**Selection rule:** Use the strictest named set that is fully covered by the properties actually present. Custom array for anything else.
+**Selection rule — CHECKS_STRICT is the default. Always start here.**
+
+The engine silently skips any check whose `expected` value is null, so CHECKS_STRICT never over-fires. Only downgrade when a structural reason makes a check impossible:
+
+| Reason to downgrade | Use instead |
+|---|---|
+| Pure layout wrapper (no visual style at all) | `CHECKS_LAYOUT` |
+| Shape-only element (icon container, avatar circle) | `CHECKS_SHAPE` |
+| Container without typography and no clear text children | `CHECKS_CONTAINER` |
+| Explicit user instruction to limit checks | Custom array |
+
+**Never** downgrade just because a property wasn't detected — the engine's silent-skip handles absent properties safely. Downgrade only for structural impossibility.
 
 ### 3b — Determine figmaScale and viewport
 
@@ -353,19 +385,28 @@ Figma side: `extractNodeSpec()` uses `firstTextNode()` from the section's Figma 
 #### How to find Figma section node IDs
 
 ```bash
-source .env
-curl -s -H "X-Figma-Token: $FIGMA_TOKEN" \
-  "https://api.figma.com/v1/files/$FIGMA_FILE_KEY/nodes?ids=PAGE_NODE_ID" \
-  | node -e "
-    const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-    const page = Object.values(d.nodes)[0].document;
-    (page.children || []).forEach(child => {
-      console.log(child.id.replace(':','-'), child.name, child.type);
-    });
-  "
+# Replace PAGE_NODE_ID with the page frame's ID (colon form)
+node -e "
+  const cache = JSON.parse(require('fs').readFileSync('figma-nodes-cache.json','utf8'));
+  const root = cache.document || Object.values(cache.nodes || {})[0]?.document;
+  function findNode(n, id) {
+    if (!n) return null;
+    if (n.id === id) return n;
+    for (const c of (n.children||[])) { const r = findNode(c, id); if (r) return r; }
+    return null;
+  }
+  const pageNode = findNode(root, 'PAGE_NODE_ID');
+  if (!pageNode) { console.error('Node not found in cache'); process.exit(1); }
+  (pageNode.children || []).forEach(child => {
+    const id = child.id.replace(/:/g, '-');
+    const w = child.absoluteBoundingBox?.width ?? 0;
+    const h = child.absoluteBoundingBox?.height ?? 0;
+    console.log(id.padEnd(20), child.name.padEnd(30), child.type, Math.round(w)+'x'+Math.round(h));
+  });
+"
 ```
 
-Each line is a section node ID + name. Use those IDs in `cases[].figmaNodeId`.
+Each line is a section node ID (hyphen form for config) + name. Use those IDs in `cases[].figmaNodeId`.
 
 #### What checks each section actually tests
 

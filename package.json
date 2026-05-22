@@ -1,6 +1,6 @@
 {
   "name": "@solashi2026/design_check",
-  "version": "1.6.3",
+  "version": "1.6.5",
   "description": "Design contract testing engine: compare Storybook CSS against Figma specs",
   "type": "module",
   "main": "index.mjs",
