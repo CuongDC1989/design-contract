@@ -12,32 +12,146 @@ Generate a single production-ready React component from a Figma design using mul
 - /figma-to-component
 - User mentions "generate component from figma", "figma to react", "convert figma to component"
 
+## HARD RULES — Enforced before any code generation
+
+### Rule 1 — Atomic Design. Monoliths are rejected.
+
+Every Figma design MUST be decomposed into atoms → molecules → organisms before any code is written.
+
+| Level | Definition | JSX line limit (hard) |
+|---|---|---|
+| **Atom** | Single visual element. Cannot be split further. | ≤ 30 lines |
+| **Molecule** | 2–4 atoms combined. One interaction purpose. | ≤ 60 lines |
+| **Organism** | Multiple molecules. One page section. | ≤ 100 lines |
+| **Template/Page** | Assembles organisms. No inline business logic. | ≤ 150 lines |
+
+**GATE — you CANNOT spawn the frontend-developer agent without:**
+1. A written decomposition table (atoms → molecules → organisms)
+2. A build order list (atoms first, then molecules, then organisms)
+3. User confirmation ("yes" or equivalent)
+
+**Anti-monolith check — run after EVERY generated file:**
+```bash
+grep -c "." src/path/to/Component.tsx
+```
+- Atom > 30 lines → reject and split
+- Molecule > 60 lines → reject, extract atoms
+- Organism > 100 lines → reject, extract molecules
+
+**Violation patterns to catch:**
+| Pattern | Fix |
+|---|---|
+| Button + Icon + Badge inline in one file | Extract each as its own atom |
+| Same JSX block repeated 2+ times in one file | Extract as atom |
+| Organism directly importing another organism | Add molecule layer between them |
+
+---
+
+### Rule 2 — Tailwind CSS only. No other styling.
+
+**All visual styling MUST use Tailwind utility classes. Nothing else.**
+
+**Forbidden — any of these in a generated file = rejection:**
+
+| Forbidden | Replace with |
+|---|---|
+| `style={{ padding: '16px' }}` | `className="p-4"` |
+| `style={{ color: '#333' }}` | `className="text-gray-800"` |
+| `import './Component.css'` | `globals.css` `@layer` |
+| `import styles from './Component.module.css'` | Tailwind classes |
+| `styled-components` / `emotion` | Tailwind classes |
+
+Only exception: truly dynamic values that cannot be a static Tailwind class:
+```tsx
+// OK — dynamic at runtime
+<div style={{ height: `${scrollOffset}px` }}>
+// NOT OK — known at build time
+<div style={{ padding: '16px' }}>   ← use p-4
+```
+
+**Anti-inline-style check — run after EVERY generated file:**
+```bash
+grep -n "style={{" src/path/to/Component.tsx
+```
+Any static value hit → replace with Tailwind class before proceeding.
+
+---
+
+### Rule 3 — Reuse before create
+
+```bash
+find src -name "*.tsx" ! -name "*.stories.tsx" | xargs grep -l "export" 2>/dev/null | head -40
+```
+If an equivalent component exists → use it. Extend via props, never duplicate.
+
+---
+
 ## Execution Rules
 
-**Think before spawning** — Before spawning the `frontend-developer` agent, confirm you have: file path, Figma data, Tailwind mapping, confirmed props interface, and user approval. Missing any of these = ask, not guess.
+**Think before spawning** — Before spawning the `frontend-developer` agent, confirm: file path, Figma data, Tailwind mapping, confirmed props interface, decomposition plan confirmed by user. Missing any = ask, not guess.
 
-**Atomic decomposition first** — Before writing any code, decompose the design into the smallest reusable units (atoms → molecules → organisms). Never write a component that can be split further. A 200-line JSX file is a decomposition failure.
+**Goal = match Figma** — The output must match the Figma design. Not "close enough", not "similar pattern from another component".
 
-**Reuse before create** — Before creating a new atom/molecule, check if an equivalent already exists in the codebase (`find src/ -name "Button*" -o -name "Badge*"`). Reuse and extend, never duplicate.
+**Responsive is mandatory** — Every component MUST support all breakpoints found in Figma. Not done until responsive is verified at each breakpoint.
 
-**Simplicity first** — Pass only what the agent needs. Do not over-specify — if the Figma node has no shadow, don't mention shadow in the prompt.
+**Bulk fetch before any analysis** — In API mode, first action is ALWAYS to fetch all nodes → `figma-nodes-cache.json`. Never fetch individual nodes from API after that. Piecemeal fetches miss nested text nodes.
 
-**Goal = match Figma** — The output must match the Figma design. Not "close enough", not "similar pattern from another component", not "how I'd normally build it".
+**MANDATORY: Typography and Layout must match Figma exactly**
 
-**Decompose, then assemble** — When user asks for `ProductCard`, the output is: `Badge` + `Avatar` + `Button` + `ProductCard` (assembled from atoms). Generating only `ProductCard` as a monolith is a violation.
+Typography (`fontFamily`, `fontWeight`, `fontSize`, `lineHeight`, `letterSpacing`, `textAlign`, `color`) and layout (`flexDirection`, `padding`, `gap`, `alignItems`, `justifyContent`) are non-negotiable.
 
-**Responsive is mandatory, not optional** — Every component MUST support all breakpoints found in the Figma file. A component that only works at desktop width is incomplete. No component is "done" until responsive is verified at each breakpoint (Step 2d → Step 3 → Step 4 → Step 7).
+- Map every typography field from the Figma `style` object to exact Tailwind classes. No approximation (`text-sm` when Figma says 15px → use `text-[15px]`).
+- Map all layout fields: `layoutMode`, all four paddings, `itemSpacing`, `counterAxisAlignItems`, `primaryAxisAlignItems`.
+- Agent prompt MUST include both typography spec AND layout spec. Missing either → fix before spawning.
+- After generation: grep for expected font-size, font-weight, gap/padding classes. Missing → fix before marking done.
 
-**Bulk fetch before any analysis** — In API mode, the very first action is ALWAYS to fetch ALL pages at depth=5 and save to `figma-nodes-cache.json`. Never fetch individual node properties from the API — read from cache. Piecemeal fetches at depth=2 or depth=4 silently miss nested components and text nodes, causing incomplete implementation.
+---
 
-**MANDATORY: Typography and Layout must match Figma exactly — no tolerance**
+## Pre-flight — Ensure `.claude/settings.json` allows all required commands
 
-Typography (`fontFamily`, `fontWeight`, `fontSize`, `lineHeight`, `letterSpacing`, `textAlign`, `color`) and layout (`flexDirection`, `padding`, `gap`, `alignItems`, `justifyContent`) are non-negotiable. The generated component MUST reproduce both exactly as specified in Figma.
+Before doing anything else, check that `.claude/settings.json` exists with the required permissions. Without it, every `curl`, `node`, and `npm` call will prompt for manual confirmation and block the workflow.
 
-- **Typography**: Every text node in Figma has a `style` object. Read it. Map every field (`fontSize`, `fontWeight`, `lineHeightPx`, `letterSpacing`, `textAlignHorizontal`) to Tailwind classes and verify after generation. Do not approximate (`text-sm` when Figma says 15px → use `text-[15px]`).
-- **Layout**: Every auto-layout frame has `layoutMode`, `paddingTop/Bottom/Left/Right`, `itemSpacing`, `counterAxisAlignItems`, `primaryAxisAlignItems`. Read all fields. Map all fields. If a padding value is 0, still check whether the parent or sibling in Figma has spacing that compensates.
-- **Before calling the frontend-developer agent**: verify that the prompt includes BOTH the full typography spec AND the full layout spec extracted from the cache. An agent prompt missing either of these will produce a component that fails design contract tests.
-- **After code generation**: grep the output for the expected font-size, font-weight, and gap/padding classes. If any are missing → fix before marking the step complete.
+```bash
+cat .claude/settings.json 2>/dev/null || echo "MISSING"
+```
+
+If missing, create it:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(source .env*)",
+      "Bash(source .env && *)",
+      "Bash(curl *)",
+      "Bash(curl -s *)",
+      "Bash(curl -sL *)",
+      "Bash(curl -s -H *)",
+      "Bash(curl -sL -o *)",
+      "Bash(node *)",
+      "Bash(node -e *)",
+      "Bash(node scripts/*)",
+      "Bash(python3 *)",
+      "Bash(cat *)",
+      "Bash(find . *)",
+      "Bash(find src *)",
+      "Bash(grep *)",
+      "Bash(grep -r *)",
+      "Bash(mkdir -p *)",
+      "Bash(wc *)",
+      "Bash(ls *)",
+      "Bash(echo *)",
+      "Read(**)",
+      "Write(**)"
+    ]
+  }
+}
+```
+
+This covers: all Figma API calls (`api.figma.com`), localhost/127.0.0.1 (Storybook), image downloads to `/tmp` and `public/`, JSON parsing, file reads, and component writes — all without confirmation prompts.
 
 ---
 
@@ -81,13 +195,24 @@ Please provide:
 
 #### 2. Detect Figma data source & Extract Design Context
 
-First, detect which method is available — use it for all subsequent Figma fetches:
+**Detection order — follow strictly, do not reverse:**
 
-- **Try** calling `figma___get_metadata` with the file key
-- If it returns data → **MCP mode**
-- If unavailable → **API mode**: load `FIGMA_TOKEN` + `FIGMA_FILE_KEY` from `.env`
+```bash
+# Step 1: Check for API token in .env
+source .env 2>/dev/null
+if [ -n "$FIGMA_TOKEN" ] && [ -n "$FIGMA_FILE_KEY" ]; then
+  echo "API mode — FIGMA_TOKEN found in .env"
+else
+  echo "No FIGMA_TOKEN — will attempt MCP"
+fi
+```
 
-**[MCP]** Call in sequence:
+- **If `FIGMA_TOKEN` is set in `.env`** → **API mode immediately.** Do NOT attempt MCP, do not call `figma___get_metadata`. Proceed to the `[API]` bulk fetch steps below.
+- **If `FIGMA_TOKEN` is NOT set** → try MCP: call `figma___get_metadata`. If it returns data → MCP mode. If unavailable → stop and ask the user to add `FIGMA_TOKEN` to `.env`.
+
+> **Why this order:** MCP requires authentication that blocks the workflow. If a token is available, API mode is always faster and requires no interactive auth.
+
+**[MCP]** — only when `FIGMA_TOKEN` is absent. Call in sequence:
 - `figma___get_metadata` — file structure, pages
 - `figma___get_design_context` with node ID — layout, fills, typography, effects
 - `figma___get_screenshot` with node ID — visual reference image (attach to agent prompt)
@@ -401,19 +526,30 @@ Agent prompt template (repeat for each `[CREATE]` component):
 ```
 Goal: Generate ONE atomic React/TypeScript component — [ComponentName] ([Atom|Molecule|Organism])
 
-ATOMIC DESIGN RULES (strictly enforced):
-- This component does ONE thing. No more.
-- Max JSX lines: Atom=30, Molecule=60, Organism=100
-- If you find yourself writing more — stop and split further
-- Import atoms/molecules from their paths instead of inlining their markup
-- Never repeat JSX that could be its own component
+═══════════════════════════════════════════════
+RULE 1 — ATOMIC DESIGN (hard limit, no exceptions)
+═══════════════════════════════════════════════
+- This component does exactly ONE thing. Level: [Atom | Molecule | Organism]
+- HARD JSX LINE LIMIT: Atom=30, Molecule=60, Organism=100
+- If you reach the limit before finishing → STOP. Split the excess into a new atom/molecule.
+- NEVER inline markup that belongs to a sub-component (e.g. no inline button markup inside a card — import Button)
+- NEVER repeat the same JSX block twice in one file → extract as an atom
+- Import all dependencies from their paths — do NOT copy their implementation inline
+
+═══════════════════════════════════════════════
+RULE 2 — TAILWIND ONLY (zero exceptions)
+═══════════════════════════════════════════════
+- ALL styling via Tailwind utility classes in className. Nothing else.
+- BANNED: style={{ }}, CSS files, CSS Modules, styled-components, emotion
+- The only allowed inline style: truly runtime-dynamic values (e.g. style={{ height: `${n}px` }} where n changes at runtime)
+- Static values known at build time MUST be Tailwind classes: padding='16px' → className="p-4"
+- Custom styles Tailwind can't express → note as a comment "TODO globals.css: ..." — never write a .css file
 
 RESPONSIVE RULES (strictly enforced):
-- Use mobile-first: write base styles for mobile, override with `md:` / `lg:` / `xl:` for larger screens
-- NEVER use fixed pixel widths like `w-[400px]` on layout containers — use `w-full`, `max-w-[Xpx]`, or responsive variants
-- NEVER hardcode a layout as desktop-only — if the Figma only shows desktop, infer the mobile layout from the structure
-- When in doubt: stack vertically on mobile, place side-by-side on desktop
-- Check the responsive behavior table before writing a single class
+- Mobile-first: base classes = mobile, `md:` / `lg:` / `xl:` = overrides for larger screens
+- NEVER fixed pixel widths on layout containers (`w-[400px]` → use `w-full max-w-[400px]`)
+- NEVER desktop-only layout — if Figma only shows desktop, stack vertically on mobile
+- When in doubt: flex-col on mobile, flex-row on md:
 
 Component level: [Atom | Molecule | Organism]
 Dependencies (already created — import from these paths):
@@ -481,11 +617,31 @@ Design Accuracy Checklist:
 
 Output:
 - Single `.tsx` file + `types.ts` if props are complex
-- **No CSS file** — all styles via Tailwind classes in JSX
-- If a style truly can't be done with Tailwind, note it as a comment like:
-  `{/* TODO globals.css: add .scrollbar-hide to @layer utilities */}`
-  The orchestrator will consolidate these into globals.css after all components are built
+- **No CSS file, no style={{ }}, no CSS Modules** — Tailwind only
+- Styles Tailwind can't express → comment only: `{/* TODO globals.css: .scrollbar-hide */}`
 ```
+
+#### 4b. Post-generation verification (mandatory — run before marking any component done)
+
+After the agent writes a file, run ALL three checks:
+
+```bash
+FILE="src/path/to/Component.tsx"
+
+# Check 1: JSX line count (hard limit by level)
+echo "Lines: $(grep -c '.' $FILE)"
+# Atom ≤30, Molecule ≤60, Organism ≤100 — if over → reject
+
+# Check 2: Inline styles (forbidden for static values)
+grep -n "style={{" $FILE
+# Any static value hit → replace with Tailwind class
+
+# Check 3: CSS imports (forbidden)
+grep -n "import.*\.css\|import.*\.module\|styled-components\|from 'emotion'" $FILE
+# Any hit → remove and replace with Tailwind
+```
+
+If any check fails → send back to the agent with the specific violation highlighted. Do not proceed to the next component until all three pass.
 
 #### 5. Create Component Files
 
@@ -840,12 +996,17 @@ IF iteration == 3 AND any breakpoint score < 9/10 → ESCALATE to user:
 
 ### Error Handling
 
-If Figma MCP is not available:
+If neither `FIGMA_TOKEN` nor MCP is available:
 ```
-Figma MCP is not connected. Add it with:
-  claude mcp add figma --transport http-sse https://mcp.figma.com/mcp
+No Figma data source found. Choose one option:
 
-Then restart Claude Code and try again.
+Option A (recommended) — add token to .env:
+  FIGMA_TOKEN=your_token_here
+  FIGMA_FILE_KEY=your_file_key_here
+
+Option B — connect MCP:
+  claude mcp add figma --transport http-sse https://mcp.figma.com/mcp
+  Then restart Claude Code.
 ```
 
 If design is too complex:

@@ -142,41 +142,102 @@ If missing, create it now:
       "Bash(npm run *)",
       "Bash(npm *)",
       "Bash(npx *)",
-      "Bash(source .env && curl *)",
       "Bash(source .env*)",
-      "Bash(curl -s https://api.figma.com/*)",
-      "Bash(curl -s -H * https://api.figma.com/*)",
-      "Bash(curl -s http://127.0.0.1:*)",
-      "Bash(curl -s * http://127.0.0.1:*)",
-      "Bash(curl -s http://localhost:*)",
-      "Bash(curl -s -L *)",
+      "Bash(source .env && *)",
+      "Bash(curl *)",
+      "Bash(curl -s *)",
+      "Bash(curl -sL *)",
+      "Bash(curl -s -H *)",
+      "Bash(curl -sL -o *)",
+      "Bash(node *)",
       "Bash(node -e *)",
       "Bash(node scripts/*)",
+      "Bash(python3 *)",
       "Bash(cat *)",
       "Bash(find . *)",
+      "Bash(find src *)",
       "Bash(grep *)",
+      "Bash(grep -r *)",
       "Bash(mkdir -p *)",
-      "Read(**)"
+      "Bash(wc *)",
+      "Bash(ls *)",
+      "Bash(echo *)",
+      "Read(**)",
+      "Write(**)"
     ]
   }
 }
 ```
 
-These rules cover:
-- `npm run *` / `npm *` / `npx *` — running build, test, storybook, and figma:spec scripts
-- `source .env && curl *` — Figma API calls preceded by env loading (most common pattern in Steps 0b, 0c)
-- `curl -s -H * https://api.figma.com/*` — standalone Figma API calls
-- `curl -s http://127.0.0.1:*` / `curl -s http://localhost:*` — reading Storybook's `/index.json` (Step 3e, Step 5b)
-- `curl -s -L *` — following redirects (Figma image exports)
-- `node -e *` — inline JSON parsing of Figma API responses
-- `node scripts/*` — running project-local scripts
-- `cat *` / `find . *` / `grep *` — discovery and config inspection (Step 0)
-- `mkdir -p *` — creating story subdirectories
-- `Read(**)` — reading all project files without prompting
+These rules cover ALL operations used by figma skills — no confirmation prompts:
 
-Once the file exists, all of the above run without confirmation prompts for the rest of the session.
+| Pattern | What it allows |
+|---|---|
+| `Bash(source .env*)` / `Bash(source .env && *)` | Loading env vars before any command |
+| `Bash(curl *)` / `Bash(curl -s *)` / `Bash(curl -sL *)` | All Figma API calls (`api.figma.com`), Storybook (`localhost:6006`), image downloads |
+| `Bash(curl -s -H *)` | Figma API calls with auth header |
+| `Bash(curl -sL -o *)` | Downloading Figma images to `/tmp` or `public/` |
+| `Bash(node -e *)` | Inline JSON parsing of API responses |
+| `Bash(python3 *)` | `python3 -m json.tool` for formatting API output |
+| `Bash(mkdir -p *)` | Creating story subdirectories, `/tmp` paths |
+| `Write(**)` | Writing any file in the project — components, stories, config, `/tmp`, `public/` |
+| `Read(**)` | Reading all project files |
 
-**⚠️ If any curl/node command still triggers a confirmation prompt** after settings.json exists, check: (a) the command pattern doesn't exactly match an allow rule, (b) the file was saved correctly with `cat .claude/settings.json`. Do NOT proceed manually confirming each call — fix the settings file first.
+**⚠️ If any command still triggers a confirmation prompt** after settings.json exists:
+1. Check the command pattern matches one of the allow rules above (patterns use glob `*` = any text)
+2. Add the missing pattern to the `allow` array
+3. Save and re-run — do NOT manually confirm each call
+
+---
+
+## Step 0-cleanup — Clean up component code before creating stories
+
+**Run this step on every component file before touching stories or config.** Stories that import a component with dead code, unused imports, or broken TypeScript will fail to load in Storybook — causing false "story not found" errors.
+
+### C1 — Remove dead code
+
+```bash
+# Detect unused imports (TypeScript compiler reports them)
+npx tsc --noEmit 2>&1 | grep -E "TS6133|TS6192|TS2305|TS2307" | head -30
+# TS6133 = declared but never read
+# TS6192 = all imports unused
+# TS2305/TS2307 = module/export not found
+```
+
+For each file that will get a story, check and remove:
+
+| Dead code type | How to detect | Action |
+|---|---|---|
+| Unused imports | `npx tsc --noEmit` → TS6133 | Delete the import line |
+| Unused variables / functions | `npx tsc --noEmit` → TS6133 | Delete or use the variable |
+| `console.log` / `console.error` debug statements | `grep -n "console\." src/` | Remove all debug logs |
+| Commented-out code blocks | `grep -n "// " src/` (manual review) | Delete if clearly stale |
+| TODO comments with no linked issue | `grep -rn "TODO\|FIXME\|HACK" src/` | Delete or convert to a real task |
+| Empty `useEffect` / `useState` with no logic | Read file | Remove if unused |
+
+```bash
+# Quick scan — run on each component file before writing its story
+FILE="src/path/to/Component.tsx"
+echo "=== TypeScript errors ===" && npx tsc --noEmit 2>&1 | grep "$FILE" | head -20
+echo "=== Debug logs ===" && grep -n "console\." "$FILE"
+echo "=== Dead comments ===" && grep -n "TODO\|FIXME\|\/\*" "$FILE" | head -10
+```
+
+### C2 — Verify TypeScript compiles clean
+
+```bash
+npx tsc --noEmit 2>&1 | grep "error TS" | head -20
+```
+
+**Zero `error TS` = proceed.** Any errors = fix before writing the story. A TypeScript error in the component prevents Storybook from compiling the module graph — all stories for that file will show "Failed to load story."
+
+### C3 — Verify no inline styles remain
+
+```bash
+grep -rn "style={{" src/ --include="*.tsx" | grep -v "\.stories\."
+```
+
+Static inline styles missed during implementation should be replaced with Tailwind classes now, before creating the story. A story that renders a component with inline styles will produce CSS snapshots that differ from Tailwind-based Figma checks.
 
 ---
 
@@ -723,30 +784,96 @@ Still run Step 0c to determine checks before writing config.
 
 ### Mode B — Batch audit (user says "wire up all" or "check what's missing")
 
-1. Run discovery (Step 0)
-2. Print a gap report to the user:
+**Mode B is Figma-driven, not React-driven.** The source of truth for "what needs a story" is the Figma file — every visible page and top-level screen frame in Figma MUST have a story. React files that exist without a Figma counterpart are also checked, but the primary audit starts from Figma.
+
+#### B0 — Build the Figma inventory first
+
+```bash
+node -e "
+  const d = JSON.parse(require('fs').readFileSync('figma-nodes-cache.json','utf8'));
+  let count = 0;
+  (d.document.children || []).forEach(page => {
+    console.log('\n=== PAGE:', page.name, '===');
+    (page.children || []).forEach(frame => {
+      if (frame.visible === false || (frame.opacity ?? 1) === 0) return;
+      if (/^_/.test(frame.name)) return;
+      const w = frame.absoluteBoundingBox?.width ?? 0;
+      const h = frame.absoluteBoundingBox?.height ?? 0;
+      if (w < 10 && h < 10) return;
+      count++;
+      console.log('  [' + count + '] ' + frame.id + '  \"' + frame.name + '\"  ' + Math.round(w) + 'x' + Math.round(h));
+    });
+  });
+  console.log('\nTotal screens/frames:', count);
+"
+```
+
+This gives the **complete list of screens** that need stories. Every frame listed here is a story target.
+
+**Grouping rules:**
+- Frames with same name at different widths (Desktop / Tablet / Mobile variants) → ONE component, multiple breakpoint contract cases
+- Frames on separate Figma pages (e.g. "Auth", "Dashboard", "Settings") → separate feature groups in Storybook title
+- Hidden frames (`visible: false`) → skip
+- Frames named with `_` prefix → skip (internal)
+
+#### B1 — Cross-reference against existing React + Storybook files
+
+```bash
+# What React components exist
+find src -name "*.tsx" ! -name "*.stories.tsx" ! -name "*.test.tsx" | sort
+
+# What stories already exist
+find src -name "*.stories.tsx" | sort
+
+# What contract cases exist
+node -e "
+  const fs = require('fs');
+  try {
+    const cfg = fs.readFileSync('design-check.config.mjs', 'utf8');
+    const matches = cfg.match(/name:\s*'([^']+)'/g) || [];
+    matches.forEach(m => console.log(m));
+  } catch { console.log('No config found'); }
+"
+```
+
+#### B2 — Print the full gap report (Figma-driven)
 
 ```
-## Audit report
+## Audit report — [DATE]
 
-### Components with no story
-- src/components/ui/Badge.tsx
-- src/features/auth/LoginPage.tsx
+### Figma screens with NO story yet
+[1] LoginPage (Auth page, 1440px) — no React component found
+[2] DashboardPage (Dashboard, 1440px) — component exists, no story
+[3] SettingsPage (Settings, 1440px) — story exists but no contract case
+
+### React components with no Figma match
+- src/components/ui/Spinner.tsx → no matching Figma frame found
 
 ### Stories with no contract case
-- src/features/users/stories/AvatarCell.stories.tsx  →  story ID: users-avatarcell--default
+- src/features/users/stories/AvatarCell.stories.tsx → story ID: users-avatarcell--default
 
-### Already fully wired (story + contract case)
+### Already fully wired (Figma frame ✓ React ✓ story ✓ contract case ✓)
 - UsersPage ✓
 - StatusBadge ✓
-- PlanBadge ✓
 ```
+
+**Every Figma screen in section 1 of this report must be wired before this task is done.**
+
+If a Figma screen has no React component yet → flag it and ask the user:
+```
+[1] LoginPage has no React component. Should I:
+  a) Create the component now (runs figma-to-component skill)
+  b) Skip for now and wire stories for existing components only
+```
+
+#### B3 — Wire all gaps in order
 
 3. Run Step 0b (including Step 0b-responsive) to discover Figma node IDs AND breakpoint frames for all gaps. Then run Step 0d (mandatory gate) — resolve ALL node IDs before writing anything.
 4. Announce: "Wiring all N gaps in order. Starting with [ComponentName]..."
-5. For each gap in sequence, show progress and complete all steps:
+5. For each gap in sequence, run **Step 0-cleanup first**, then complete all steps:
    ```
    [1/N] Wiring ComponentName...
+     → Step 0-cleanup: remove dead code, verify TS compiles clean
      → Step 0b-responsive: detect breakpoint frames (desktop/tablet/mobile)
      → Step 0c: fetch Figma node properties (per breakpoint)
      → Step 1: add data-testid
@@ -762,6 +889,8 @@ Still run Step 0c to determine checks before writing config.
 7. After all N components are done, run Step 5 (verify) then Step 5e (final completeness audit).
 
 **Do not ask "which components should I wire?" — wire all of them.** If the user wants to exclude a component, they will say so. Otherwise, proceed with the full gap list.
+
+**The batch is complete only when every Figma screen from the B0 inventory has a story and a contract case.** A partial run (some components wired, others skipped) is not done.
 
 ---
 

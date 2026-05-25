@@ -6,6 +6,38 @@ Generate a complete feature page — React components + Storybook stories + desi
 
 ---
 
+## Pre-flight — Ensure `.claude/settings.json` allows all commands
+
+Before doing anything else:
+
+```bash
+cat .claude/settings.json 2>/dev/null || echo "MISSING"
+```
+
+If missing, create it with these permissions (covers all Figma API calls, Storybook, image downloads, writes to `/tmp` and `public/`):
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)", "Bash(npm *)", "Bash(npx *)",
+      "Bash(source .env*)", "Bash(source .env && *)",
+      "Bash(curl *)", "Bash(curl -s *)", "Bash(curl -sL *)",
+      "Bash(curl -s -H *)", "Bash(curl -sL -o *)",
+      "Bash(node *)", "Bash(node -e *)", "Bash(node scripts/*)",
+      "Bash(python3 *)",
+      "Bash(cat *)", "Bash(find . *)", "Bash(find src *)",
+      "Bash(grep *)", "Bash(grep -r *)",
+      "Bash(mkdir -p *)", "Bash(wc *)", "Bash(ls *)", "Bash(echo *)",
+      "Read(**)",
+      "Write(**)"
+    ]
+  }
+}
+```
+
+---
+
 ## MANDATORY RULE — Typography + Layout accuracy is non-negotiable
 
 > **This rule applies to every phase of this skill. It overrides any "keep it simple" instinct.**
@@ -64,9 +96,25 @@ Build a mental map:
 - Which already have stories?
 - Which are already wired in `design-check.config.mjs`?
 
-### 1b — Bulk fetch the entire Figma file (follow figma-to-component)
+### 1b — Detect data source, then bulk fetch the entire Figma file
 
-**This step replaces all piecemeal Figma API calls.** Follow the exact same 3-step bulk fetch defined in `figma-to-component`:
+**Detect source first — check env before attempting MCP:**
+
+```bash
+source .env 2>/dev/null
+if [ -n "$FIGMA_TOKEN" ] && [ -n "$FIGMA_FILE_KEY" ]; then
+  echo "API mode — using FIGMA_TOKEN from .env"
+else
+  echo "No FIGMA_TOKEN — will attempt MCP"
+fi
+```
+
+- **`FIGMA_TOKEN` set in `.env`** → **API mode — run the bulk fetch below. Do not call MCP tools.**
+- **`FIGMA_TOKEN` not set** → try `figma___get_metadata`. If it returns data, use MCP (`figma___get_design_context`) for subsequent steps. If MCP is unavailable, stop and ask the user to add `FIGMA_TOKEN` to `.env`.
+
+> **Why API first:** MCP prompts for authentication and blocks the workflow. If a token exists, always use it.
+
+**This step replaces all piecemeal Figma API calls.** Follow the 3-step bulk fetch:
 
 **Step 1 — List files in the project (optional, if `FIGMA_PROJECT_ID` is set):**
 ```bash
@@ -110,7 +158,7 @@ node -e "
 "
 ```
 
-> **MCP mode:** Call `figma___get_metadata` — if it returns data, use MCP calls (`figma___get_design_context`) instead of curl for the steps below. The cache file is still written for property inspection.
+> **MCP mode (only when `FIGMA_TOKEN` is absent):** Call `figma___get_metadata`. If it returns data, use `figma___get_design_context` instead of curl for subsequent property lookups. The cache file is still written for node inspection.
 
 ### 1c — List pages and let user choose
 

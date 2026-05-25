@@ -27,7 +27,7 @@ A missing typography or layout spec in the agent prompt will produce code that f
 
 ## Phase 2 — Component Implementation (2a–2g)
 
-> **Figma source mode** was detected in Phase 1 (step 1b). Use the same mode (`[MCP]` or `[API]`) for every fetch in this phase — do not mix.
+> **Figma source mode** was determined in Phase 1 (step 1b): **`[Cache]` when `FIGMA_TOKEN` was found in `.env` (default), `[MCP]` only when no token was present.** Use the same mode for every fetch in this phase — do not mix, do not switch to MCP if a token is available.
 
 For each component in the confirmed map (skip any marked `skip`):
 
